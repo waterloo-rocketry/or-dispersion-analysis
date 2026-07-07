@@ -3,6 +3,7 @@ import re
 import numpy as np
 import pandas as pd
 import tkinter as tk
+import contextily as cx
 import matplotlib as mpl
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
@@ -11,6 +12,21 @@ import matplotlib.patches as mpatches
 from pathlib import Path
 from scipy.stats import chi2
 from tkinter import filedialog
+
+
+def _get_col(data, *names):
+    """
+    Returns the first matching column from a DataFrame by trying multiple possible column names.
+    Avoids the ambiguous truth-value error that occurs when using `or` with pandas Series.
+    :param data:    pandas DataFrame
+    :param names:   column names to try in order
+    :return:        first matching Series, or None if none found
+    """
+    for name in names:
+        col = data.get(name)
+        if col is not None:
+            return col
+    return None
 
 
 def print_stats(name, series):
@@ -66,12 +82,10 @@ def generate_labels(file_paths):
     """
     labels = []
 
-    # Clean up file name
     for path in file_paths:
         filename = os.path.basename(path)
         name, _ = os.path.splitext(filename)
         name = name.replace("_", " ").replace("-", " ")
-
         label = name.title()
         labels.append(label)
 
@@ -98,6 +112,20 @@ def get_colors(file_paths):
     return colors, sigma_colors
 
 
+def make_safe_filename(title, ext="png"):
+    """
+    Removes any special characters from plot title to prevent errors when saving file.
+    :param title:   user-provided plot title
+    :param ext:     specifies file extension
+    :return:        file path as type Path
+    """
+    if not title:
+        title = "plot"
+    safe = re.sub(r'[^\w\s-]', '', title)
+    safe = re.sub(r'\s+', '_', safe)
+    return Path(f"{safe}.{ext}")
+
+
 def set_default_style():
     """
     Sets default plotting style.
@@ -119,27 +147,22 @@ def set_default_style():
     })
 
 
+# ── Ellipse math ──────────────────────────────────────────────────────────────
+
 def ellipse_math(x, y):
     """
-    Function to compute properties of the ellipse required to plot it:
-        1.  Computes center (x,y) coordinates of ellipse
-        2.  Computes covariance matrix of population
-            --> Gives the variance of x values w.r.t. y values and vice versa
-        3.  Computes eigenvalues and eigenvectors of population
-            --> Eigenvalues correspond to semi-major and semi-minor axes
-            --> Eigenvectors define rotation of the ellipse
-        4.  Computes rotation of the ellipse using eigenvectors
+    Function to compute properties of the ellipse required to plot it.
     :param x:   x values of population
     :param y:   y values of population
     :return:    center (x,y) coordinates of ellipse; semi-major and semi-minor axis length; rotation of ellipse
     """
     mean_x, mean_y =    np.mean(x), np.mean(y)
     cov =               np.cov(x, y)
-    vals, vecs =        np.linalg.eigh(cov)     # eigen decomposition
-    order =             vals.argsort()[::-1]    # sort largest eigenvalue first
+    vals, vecs =        np.linalg.eigh(cov)
+    order =             vals.argsort()[::-1]
     vals =              vals[order]
     vecs =              vecs[:, order]
-    theta =             np.degrees(np.arctan2(*vecs[:, 0][::-1]))  # Angle of ellipse in degrees
+    theta =             np.degrees(np.arctan2(*vecs[:, 0][::-1]))
 
     return mean_x, mean_y, vals, theta
 
@@ -147,16 +170,6 @@ def ellipse_math(x, y):
 def plot_ellipse(x, y, major, minor, tilt, edge_color, style, name, ax):
     """
     Plots ellipses with provided arguments.
-    :param x:
-    :param y:
-    :param major:       2 * semi-major axis
-    :param minor:       2 * semi-minor axis
-    :param tilt:        rotation of the ellipse relative to horizontal; in radians
-    :param edge_color:
-    :param style:
-    :param name:
-    :param ax:
-    :return:            plots ellipse
     """
     ellipse = mpatches.Ellipse(
         (x, y),
@@ -173,40 +186,32 @@ def plot_ellipse(x, y, major, minor, tilt, edge_color, style, name, ax):
     ax.add_patch(ellipse)
 
 
+# ── Known locations ───────────────────────────────────────────────────────────
+
 def plot_known_locations(launch_lon, launch_lat, ax):
     """
-    Function to plot known launch and obstacle locations around Launch Canada
-    :param launch_lon:  advanced pad launch longitude
-    :param launch_lat:  advanced pad launch latitude
-    :param ax:          matplotlib axes object where data is plotted
-    :return:            plots known locations on ax object
+    Function to plot known launch and obstacle locations around Launch Canada.
     """
-    # Known Coordinates
-    lodge_lat =         47.9017898
-    lodge_lon =         -81.6497071
+    lodge_lat       = 47.9017898
+    lodge_lon       = -81.6497071
 
-    highway_144 =       pd.read_csv("../Road Coordinates/highway_144.csv")
-    highway_144_lat =   highway_144["Latitude"]
-    highway_144_lon =   highway_144["Longitude"]
+    highway_coords  = pd.read_csv("../LC Geography/highway_144+101.csv")
+    highway_lat     = highway_coords["Latitude"]
+    highway_lon     = highway_coords["Longitude"]
 
-    ax.plot(highway_144_lon, highway_144_lat, color="grey", linewidth=2, label="Highway 144")
+    ax.plot(highway_lon, highway_lat, color="grey", linewidth=2, label="Hwy 144 & Hwy 101")
     ax.scatter(launch_lon, launch_lat, edgecolors="black", color="yellow", marker="*", s=150, label="Launch Site")
     ax.scatter(lodge_lon, lodge_lat, edgecolors="black", color="xkcd:lightblue", marker="^", s=80, label="Tata Chika Pika Lake Lodge")
 
 
+# ── Haversine / outliers ──────────────────────────────────────────────────────
+
 def haversine_nm(ref_latitude, ref_longitude, latitude, longitude):
     """
     Compute the great-circle distance between two points on Earth (in nautical miles).
-    All inputs and outputs are in degrees and nautical miles respectively.
-    :param ref_latitude:
-    :param ref_longitude:
-    :param latitude:
-    :param longitude:
-    :return:
     """
-    R_nm = 3443.92  # Earth's radius in nautical miles
+    R_nm = 3443.92
 
-    # Convert all angles to radians
     ref_latitude, ref_longitude, latitude, longitude = map(np.radians, [ref_latitude, ref_longitude, latitude, longitude])
 
     dlat = latitude - ref_latitude
@@ -220,21 +225,13 @@ def haversine_nm(ref_latitude, ref_longitude, latitude, longitude):
 
 def get_outliers(radius_nm, ref_latitude, ref_longitude, latitude, longitude):
     """
-    Incomplete.
-    :param radius_nm:
-    :param ref_latitude:
-    :param ref_longitude:
-    :param latitude:
-    :param longitude:
-    :return:
+    Returns indices of points outside the given radius.
     """
     distance_nm = haversine_nm(ref_latitude, ref_longitude, latitude, longitude)
     print(distance_nm)
 
-    # Boolean mask for points outside the radius
     outside_pts = distance_nm > radius_nm
 
-    # If latitude is a Series, use its index; otherwise, use NumPy where()
     if hasattr(latitude, "index"):
         indices = latitude.index[outside_pts]
     else:
@@ -243,42 +240,84 @@ def get_outliers(radius_nm, ref_latitude, ref_longitude, latitude, longitude):
     return indices
 
 
-def plot_data(file_paths, plot_title, ax, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95):
+# ── Shared extract helper ─────────────────────────────────────────────────────
+
+def _extract_columns(data):
     """
-    Function to plot data from dispersion analysis plugin including options for statistical analysis of data points.
+    Extracts rocket and payload lat/lon columns from a DataFrame, trying
+    both Polaris and Aurora column name conventions.
+    :param data:    pandas DataFrame read from a .csv file
+    :return:        tuple of (rocket_latitude, rocket_longitude, payload_latitude, payload_longitude)
+                    any of which may be None if not found
+    """
+
+    lat_suffixes = ("Landing Latitude (°N)", "Landing Latitude (deg N)")
+    lon_suffixes = ("Landing Longitude (°E)", "Landing Longitude (deg E)")
+
+    lat_col = next((col for col in data.columns if col.endswith(lat_suffixes)), None)
+    lon_col = next((col for col in data.columns if col.endswith(lon_suffixes)), None)
+
+    rocket_latitude = data[lat_col] if lat_col else None
+    rocket_longitude = data[lon_col] if lon_col else None
+
+    payload_latitude = None
+    payload_longitude = None
+
+    # rocket_latitude = _get_col(
+    #     data,
+    #     "Polaris Rocket Landing Latitude (°N)",
+    #     "Aurora Rocket Landing Latitude (°N)"
+    # )
+    # rocket_longitude = _get_col(
+    #     data,
+    #     "Polaris Rocket Landing Longitude (°E)",
+    #     "Aurora Rocket Landing Longitude (°E)"
+    # )
+    # payload_latitude = _get_col(
+    #     data,
+    #     "Polaris Deployable Payload Landing Latitude (°N)",
+    #     "Deployable Payload Landing Latitude (°N)"
+    # )
+    # payload_longitude = _get_col(
+    #     data,
+    #     "Polaris Deployable Payload Landing Longitude (°E)",
+    #     "Deployable Payload Landing Longitude (°E)"
+    # )
+
+    return rocket_latitude, rocket_longitude, payload_latitude, payload_longitude
+
+
+# ── Shared plotting function ──────────────────────────────────────────────
+
+def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence):
+    """
+    Core logic to populate a matplotlib Axes object with the dispersion data.
+    Plots all files: rocket and payload scatter points plus optional ellipses onto ax.
+    :param ax:                      matplotlib axes object where data is plotted
     :param file_paths:              array of .csv file file_path names with longitude/latitude data
     :param plot_title:              user-provided title of plot
-    :param ax:                      matplotlib axes object where data is plotted
     :param plot_LC_ellipse:         bool, user-option to plot arbitrary 10nm radius around advanced pad launch site
     :param plot_sigma_ellipses:     bool, user-option to plot ellipses enclosing n * standard deviation
     :param plot_confidence_ellipse: bool, user-option to plot ellipse enclosing n% of data points
     :param confidence:              float, user-option specifying perecentage of data points to enclose
     :return:                        plots data in dispersion_zone app
     """
-    scatter_labels =            generate_labels(file_paths)
-    colors, sigma_colors =      get_colors(file_paths)
-
-    ax.clear()
+    scatter_labels = generate_labels(file_paths)
+    colors, sigma_colors = get_colors(file_paths)
 
     launch_lat = 47.965378
     launch_lon = -81.873536
 
     # Loop to read files
     for i, (file_path, label, color) in enumerate(zip(file_paths, scatter_labels, colors)):
-
         if not os.path.exists(file_path):
             print(f"File not found: {file_path}")
-            continue
+            return
 
-        # Extract data
         data = pd.read_csv(file_path, encoding="utf-8", sep=None, engine="python", index_col=False)
 
-        rocket_latitude         = data.get("Aurora Rocket Landing Latitude (°N)")
-        rocket_longitude        = data.get("Aurora Rocket Landing Longitude (°E)")
-        payload_latitude        = data.get("Deployable Payload Landing Latitude (°N)")
-        payload_longitude       = data.get("Deployable Payload Landing Longitude (°E)")
+        rocket_latitude, rocket_longitude, payload_latitude, payload_longitude = _extract_columns(data)
 
-        # Plot rocket
         if rocket_longitude is not None:
             ax.scatter(
                 rocket_longitude,
@@ -286,32 +325,29 @@ def plot_data(file_paths, plot_title, ax, plot_LC_ellipse=True, plot_sigma_ellip
                 facecolor=color,
                 edgecolor=color,
                 marker=".",
+                s=10,
                 alpha=0.7,
                 label=f"{label}"
             )
 
-        # Plot payload
         if payload_longitude is not None:
             ax.scatter(
                 payload_longitude,
                 payload_latitude,
                 color=color,
                 marker="x",
+                s=10,
                 alpha=0.7,
                 label=f"{label} - Payload"
             )
 
-        if plot_sigma_ellipses:
-            # Ellipse math: compute covariance matrix to get size and rotation of ellipse
+        if plot_sigma_ellipses and rocket_longitude is not None:
             mean_x, mean_y, vals, theta = ellipse_math(rocket_longitude.values, rocket_latitude.values)
 
-            # Ellipse radii for 1σ, 2σ, 3σ
-            sigma_levels    = [1, 2, 3]
-            ellipse_params  = [(np.sqrt(vals[0]) * level * 2, np.sqrt(vals[1]) * level * 2) for level in sigma_levels]
+            sigma_levels =   [1, 2]
+            ellipse_params = [(np.sqrt(vals[0]) * level * 2, np.sqrt(vals[1]) * level * 2) for level in sigma_levels]
 
-            # For each sigma level, plot the ellipse
             for (width, height), level, sigma_color in zip(ellipse_params, sigma_levels, sigma_colors):
-                name = f"{level}σ ellipse for {label}"
                 plot_ellipse(
                     x=mean_x,
                     y=mean_y,
@@ -320,36 +356,31 @@ def plot_data(file_paths, plot_title, ax, plot_LC_ellipse=True, plot_sigma_ellip
                     tilt=theta,
                     edge_color=sigma_color,
                     style="-",
-                    name=name,
+                    # name=f"{level}σ ellipse for {label}",
+                    name=f"",
                     ax=ax
                 )
 
-        if plot_confidence_ellipse:
-            # Ellipse math: compute covariance matrix to get size and rotation of ellipse
+        if plot_confidence_ellipse and rocket_longitude is not None:
             mean_x, mean_y, vals, theta = ellipse_math(rocket_longitude.values, rocket_latitude.values)
-            name        = f"{confidence * 100}% Confidence Ellipse"
-            edge_color  = "xkcd:bluish purple"
 
-            # Define size of ellipse based on confidence level
-            chi2_val    = chi2.ppf(confidence, 2)
-            major_axis  = (2 * np.sqrt(vals[0] * chi2_val))
-            minor_axis  = (2 * np.sqrt(vals[1] * chi2_val))
+            chi2_val   = chi2.ppf(confidence, 2)
+            major_axis = 2 * np.sqrt(vals[0] * chi2_val)
+            minor_axis = 2 * np.sqrt(vals[1] * chi2_val)
 
-            # 95% confidence ellipse
             plot_ellipse(
                 x=mean_x,
                 y=mean_y,
                 major=major_axis,
                 minor=minor_axis,
                 tilt=theta,
-                edge_color=edge_color,
+                edge_color="xkcd:bluish purple",
                 style="-",
-                name=name,
-                ax=ax)
+                name=f"{confidence * 100}% Confidence Ellipse",
+                ax=ax
+            )
 
     if plot_LC_ellipse:
-        # Arbitrary Launch Canada limit on dispersion to prevent rockets from landing near highway 144
-        # 1 NM = 1852 meters, so 10 NM = 18520 m; Convert meters to degrees approx (1 degree latitude ≈ 111.32 km)
         diameter_deg_lat = 2 * (18520 / 111320)
         diameter_deg_lon = 2 * (18520 / (111320 * np.cos(np.radians(launch_lat))))
 
@@ -362,11 +393,67 @@ def plot_data(file_paths, plot_title, ax, plot_LC_ellipse=True, plot_sigma_ellip
             edge_color="red",
             style="--",
             name="10 NM Radius",
-            ax=ax)
+            ax=ax
+        )
+
+    # 1x1 Mile Grid Math
+    lat_ref = 47.704847
+    long_ref = -82.510814
+    width, length = 47, 35
+    deg_lat_per_mile = 1 / 69.0
+    deg_lon_per_mile = 1 / (69.17 * np.cos(np.radians(lat_ref)))
+    width_deg, height_deg = width * deg_lon_per_mile, length * deg_lat_per_mile
+
+    # Waiver Rectangle
+    rectangle = mpl.patches.Rectangle(
+        xy=(long_ref, lat_ref),
+        width=width_deg,
+        height=height_deg,
+        edgecolor="red",
+        linestyle="-",
+        linewidth=2,
+        facecolor="none",
+        label="LC Full Waiver Boundary",
+        zorder=3
+    )
+    ax.add_patch(rectangle)
+
+    # Grid Lines
+    x_grid = [long_ref + (i * deg_lon_per_mile) for i in range(1, width)]
+    y_grid = [lat_ref + (i * deg_lat_per_mile) for i in range(1, length)]
+    ax.vlines(x=x_grid, ymin=lat_ref, ymax=lat_ref + height_deg, colors='gray', linestyles=':', linewidth=0.5, zorder=2)
+    ax.hlines(y=y_grid, xmin=long_ref, xmax=long_ref + width_deg, colors='gray', linestyles=':', linewidth=0.5, zorder=2)
+
+    buffer = 0.1
+    ax.set_xlim(long_ref - buffer, long_ref + width_deg + buffer)
+    ax.set_ylim(lat_ref - buffer, lat_ref + height_deg + buffer)
+
+    ax.margins(0.03)
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.figure.canvas.draw()
 
     plot_known_locations(launch_lon, launch_lat, ax)
 
-    # Tidy the labels and display in the legend
+    try:
+        cx.add_basemap(
+            ax,
+            crs="EPSG:4326",
+            source="LC Geography/lc_basemap.tif",
+            zorder=0,
+            alpha=0.9,
+            attribution=False
+        )
+    except Exception as e:
+        print(f"Could not load local basemap: {e}")
+        cx.add_basemap(
+            ax,
+            crs="EPSG:4326",
+            source=cx.providers.Esri.WorldImagery,
+            zorder=0,
+            alpha=0.9,
+            attribution=False
+        )
+
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         sorted_pairs = sorted(zip(labels, handles), key=lambda x: 0 if x[0] in scatter_labels else 1)
@@ -376,177 +463,28 @@ def plot_data(file_paths, plot_title, ax, plot_LC_ellipse=True, plot_sigma_ellip
     ax.set_xlabel("Longitude (°)")
     ax.set_ylabel("Latitude (°)")
     ax.set_title(plot_title)
-    ax.grid(True)
-    # ax.relim()
-    # ax.autoscale_view()
-    ax.margins(0.03)  # Add small margin so points/ellipses aren't on the plot edge
-    ax.set_aspect('equal', adjustable='datalim')
+
+# ── Public plotting functions ─────────────────────────────────────────────────
+
+def plot_data(file_paths, plot_title, fig, ax, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95):
+    """Updates the Tkinter UI plot."""
+    ax.clear()
+    draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence)
 
 
 def save_plot(file_paths, plot_title, output_path: str | None = None, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95):
-    """
-    Function to save user-generated plot. Addresses issue with high-def displays (specifically Mac machines) where plots
-    generated in tkinter are blurry; gets around this issue by re-plotting in matplotlib.pyplot.
-    :param file_paths:              array of .csv file file_path names with longitude/latitude data
-    :param plot_title:              user-provided title of plot
-    :param output_path:             file path and file name of plot to be saved
-    :param plot_LC_ellipse:         bool, user-option to plot arbitrary 10nm radius around advanced pad launch site
-    :param plot_sigma_ellipses:     bool, user-option to plot ellipses enclosing n * standard deviation
-    :param plot_confidence_ellipse: bool, user-option to plot ellipse enclosing n% of data points
-    :param confidence:              float, user-option specifying perecentage of data points to enclose
-    :return:                        saves plot to output_path
-    """
-    scatter_labels =            generate_labels(file_paths)
-    colors, sigma_colors =      get_colors(file_paths)
-
+    """Saves a high-resolution plot bypassing Tkinter display quirks."""
     set_default_style()
     dispersion_plot, axes = plt.subplots(figsize=(10, 8))
-
-    launch_lat = 47.965378
-    launch_lon = -81.873536
-
-    # Loop to read files
-    for i, (file_path, label, color) in enumerate(zip(file_paths, scatter_labels, colors)):
-
-        if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
-            continue
-
-        # Extract data
-        data = pd.read_csv(file_path, encoding="utf-8", sep=None, engine="python", index_col=False)
-
-        rocket_latitude     = data.get("Aurora Rocket Landing Latitude (°N)")
-        rocket_longitude    = data.get("Aurora Rocket Landing Longitude (°E)")
-        payload_latitude    = data.get("Deployable Payload Landing Latitude (°N)")
-        payload_longitude   = data.get("Deployable Payload Landing Longitude (°E)")
-
-        # Plot rocket
-        if rocket_longitude is not None:
-            axes.scatter(
-                rocket_longitude,
-                rocket_latitude,
-                facecolor=color,
-                edgecolor=color,
-                marker=".",
-                alpha=0.7,
-                label=f"{label}"
-            )
-
-        # Plot payload
-        if payload_longitude is not None:
-            axes.scatter(
-                payload_longitude,
-                payload_latitude,
-                color=color,
-                marker="x",
-                alpha=0.7,
-                label=f"{label} - Payload"
-            )
-
-        if plot_sigma_ellipses:
-            # Ellipse math: compute covariance matrix to get size and rotation of ellipse
-            mean_x, mean_y, vals, theta = ellipse_math(rocket_longitude.values, rocket_latitude.values)
-
-            # Ellipse radii for 1σ, 2σ, 3σ
-            sigma_levels    = [1, 2, 3]
-            ellipse_params  = [(np.sqrt(vals[0]) * level * 2, np.sqrt(vals[1]) * level * 2) for level in sigma_levels]
-
-            for (width, height), level, sigma_color in zip(ellipse_params, sigma_levels, sigma_colors):
-                name = f"{level}σ ellipse for {label}"
-                plot_ellipse(
-                    x=mean_x,
-                    y=mean_y,
-                    major=width,
-                    minor=height,
-                    tilt=theta,
-                    edge_color=sigma_color,
-                    style="-",
-                    name=name,
-                    ax=axes
-                )
-
-        if plot_confidence_ellipse:
-            # Ellipse math: compute covariance matrix to get size and rotation of ellipse
-            mean_x, mean_y, vals, theta = ellipse_math(rocket_longitude.values, rocket_latitude.values)
-            name        = f"{confidence * 100}% Confidence Ellipse"
-            edge_color  = "xkcd:bluish purple"
-
-            # Define size of ellipse based on confidence level
-            chi2_val    = chi2.ppf(confidence, 2)
-            major_axis  = (2 * np.sqrt(vals[0] * chi2_val))
-            minor_axis  = (2 * np.sqrt(vals[1] * chi2_val))
-
-            # 95% confidence ellipse
-            plot_ellipse(
-                x=mean_x,
-                y=mean_y,
-                major=major_axis,
-                minor=minor_axis,
-                tilt=theta,
-                edge_color=edge_color,
-                style="-",
-                name=name,
-                ax=axes
-            )
-
-    if plot_LC_ellipse:
-        # 1 NM = 1852 meters, so 10 NM = 18520 m; Convert meters to degrees approx (1 degree latitude ≈ 111.32 km)
-        diameter_deg_lat = 2 * (18520 / 111320)
-        diameter_deg_lon = 2 * (18520 / (111320 * np.cos(np.radians(launch_lat))))
-
-        plot_ellipse(
-            x=launch_lon,
-            y=launch_lat,
-            major=diameter_deg_lon,
-            minor=diameter_deg_lat,
-            tilt=0,
-            edge_color="red",
-            style="--",
-            name="10 NM Radius",
-            ax=axes
-        )
-
-    plot_known_locations(launch_lon, launch_lat, axes)
-
-    # Tidy the labels and display in the legend
-    handles, labels = axes.get_legend_handles_labels()
-    if handles:
-        sorted_pairs = sorted(zip(labels, handles), key=lambda x: 0 if x[0] in scatter_labels else 1)
-        sorted_labels, sorted_handles = zip(*sorted_pairs)
-        axes.legend(sorted_handles, sorted_labels)
-
-    axes.set_xlabel("Longitude (°)")
-    axes.set_ylabel("Latitude (°)")
-    axes.set_title(plot_title)
-    axes.grid(True)
-    axes.margins(0.03)  # Add small margin so points/ellipses aren't on the plot edge
-    axes.set_aspect('equal', adjustable='datalim')
-
+    draw_plot_elements(axes, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence)
     dispersion_plot.tight_layout()
-    # plt.show()
 
-    # Choose filename: user-provided output_path preferred; else crate a safe name
+    # Choose filename
     if output_path:
         filename = Path(output_path)
     else:
         filename = make_safe_filename(plot_title)
 
-    # Ensure parent dir exists (optional)
     filename.parent.mkdir(parents=True, exist_ok=True)
-
-    # Save plot
     dispersion_plot.savefig(filename, transparent=False, dpi=300)
-
-
-def make_safe_filename(title, ext="png"):
-    """
-    Removes any special characters from plot title to prevent errors when saving file.
-    :param title:   user-provided plot title
-    :param ext:     specifies file extension
-    :return:        file path as type Path
-    """
-    if not title:
-        title = "plot"
-    safe = re.sub(r'[^\w\s-]', '', title)
-    safe = re.sub(r'\s+', '_', safe)
-    return Path(f"{safe}.{ext}")
+    plt.close(dispersion_plot)
