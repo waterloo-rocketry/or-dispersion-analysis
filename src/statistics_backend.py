@@ -24,24 +24,27 @@ def get_outlier_indices(historical_file):
         print(e)
         return None
 
-    print(general_df.columns.tolist())
-
     launch_lat = 47.965378
     launch_lon = -81.873536
 
-    # I might have to change the name of these depending on the names of the columns
-    latitudes = general_df[f"Polaris Rocket Landing Latitude (°N)"]
-    longitudes = general_df[f"Polaris Rocket Landing Longitude (°E)"]
+    lat_col = next((col for col in general_df.columns if "Landing Latitude" in col), None)
+    lon_col = next((col for col in general_df.columns if "Landing Longitude" in col), None)
+
+    if not lat_col or not lon_col:
+        print(f"Could not find latitude/longitude columns in {historical_file}")
+        return []
+
+    latitudes = general_df[lat_col]
+    longitudes = general_df[lon_col]
 
     outlier_indices = get_outliers(
-        radius_nm=10,  # or whatever limit you want
+        radius_nm=10,
         ref_latitude=launch_lat,
         ref_longitude=launch_lon,
         latitude=latitudes,
         longitude=longitudes
     )
 
-    # List of all indices (on the table) where the launch was outside the 10 NM radius
     return outlier_indices
 
 
@@ -69,52 +72,60 @@ def coordinate_stats(historical_file_path):
         print(e)
         return None
 
-    print(launch_data_frame)
+    # --- NEW: Helper function to gracefully find columns ---
+    def get_series(df, *possible_names):
+        for name in possible_names:
+            if name in df.columns:
+                return df[name]
+        # Fallback of 0s so calculations don't crash if a column is missing
+        return pd.Series([0.0] * len(df))
 
     # 1/10 | total_simulations
     total_sims = len(launch_data_frame)
 
-    # 2/10 | mean_apogee
-    mean_apogee = round(launch_data_frame['Apogee (ft)'].mean(), 2)
+    # 2/10 & 3/10 | apogee
+    apogee_series = get_series(launch_data_frame, 'Apogee (ft)')
+    mean_apogee = round(apogee_series.mean(), 2)
+    std_apogee = apogee_series.std()
 
-    # 4/10 | mean_landing_distance
-    landing_distances_feet = np.sqrt(
-        launch_data_frame['Polaris Rocket Position East of Launch (ft)'] ** 2 +
-        launch_data_frame['Polaris Rocket Position North of Launch (ft)'] ** 2
-    )
+    # 4/10, 5/10, 6/10 | landing_distance
+    east_series = get_series(launch_data_frame, 'Polaris Rocket Position East of Launch (ft)',
+                             'Aurora Rocket Position East of Launch (ft)', 'Position East of Launch (ft)')
+    north_series = get_series(launch_data_frame, 'Polaris Rocket Position North of Launch (ft)',
+                              'Aurora Rocket Position North of Launch (ft)', 'Position North of Launch (ft)')
+
+    landing_distances_feet = np.sqrt(east_series ** 2 + north_series ** 2)
     landing_distances = landing_distances_feet * 0.000189394
     mean_landing_distance = landing_distances.mean()
-
-    # 3/10 | std_apogee
-    std_apogee = launch_data_frame['Apogee (ft)'].std()
-
-    # 5/10 | std_landing_distance
     std_landing_distance = landing_distances.std()
-
-    # 6/10 | max_landing_distance
     max_landing_distance = landing_distances.max()
 
     # 7/10 | accuracy_launches
     perimeter = 60761.2  # 10 Nautical Miles in ft.
     successes = (landing_distances <= perimeter).sum()
-
     try:
         accuracy_launches = successes / total_sims
     except ZeroDivisionError:
         accuracy_launches = 0
 
     # 8/10 | mean_min_stability
-    mean_min_stability = launch_data_frame['Polaris Rocket Min Stability'].mean()
+    stability_series = get_series(launch_data_frame, 'Polaris Rocket Min Stability', 'Aurora Rocket Min Stability',
+                                  'Min Stability')
+    mean_min_stability = stability_series.mean()
 
     # 9/10 | mean_lateral_velocity
-    mean_lateral_velocity = launch_data_frame['Polaris Rocket Lateral Velocity at Apogee (m/s)'].mean()
+    lateral_vel_series = get_series(launch_data_frame, 'Polaris Rocket Lateral Velocity at Apogee (m/s)',
+                                    'Aurora Rocket Lateral Velocity at Apogee (m/s)',
+                                    'Lateral Velocity at Apogee (m/s)')
+    mean_lateral_velocity = lateral_vel_series.mean()
 
     # 10/10 | mean_wind_speed
-    mean_wind_speed = launch_data_frame['Max Windspeed (mph)'].mean()
+    wind_series = get_series(launch_data_frame, 'Max Windspeed (mph)')
+    mean_wind_speed = wind_series.mean()
 
     launch_stats = RocketStats(total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
                                max_landing_distance, accuracy_launches, mean_min_stability, mean_lateral_velocity,
-                               mean_wind_speed, )
+                               mean_wind_speed)
 
     return launch_stats
 
