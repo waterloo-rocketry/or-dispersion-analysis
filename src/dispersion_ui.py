@@ -115,15 +115,25 @@ class FilePlotApp:
 
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_canvas.yview)
         scrollbar.grid(row=0, column=1, sticky="ns")
-        self.file_canvas.config(yscrollcommand=scrollbar.set)
+        # self.file_canvas.config(yscrollcommand=scrollbar.set)
+
+        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.file_canvas.xview)
+        h_scrollbar.grid(row=1, column=0, sticky="ew")
+
+        self.file_canvas.config(yscrollcommand=scrollbar.set, xscrollcommand=h_scrollbar.set)
 
         # This inner frame is what actually holds the checkboxes
         self.file_check_frame = ttk.Frame(self.file_canvas)
-        self.file_canvas.create_window((0, 0), window=self.file_check_frame, anchor="nw")
+
+        # --- NEW: Save the window ID to a variable ---
+        self.canvas_window = self.file_canvas.create_window((0, 0), window=self.file_check_frame, anchor="nw")
 
         # This line makes the scroll region update whenever checkboxes are added
         self.file_check_frame.bind("<Configure>", lambda e: self.file_canvas.configure(
             scrollregion=self.file_canvas.bbox("all")))
+
+        # --- NEW: Force the inner frame to be at least as wide as the canvas ---
+        self.file_canvas.bind("<Configure>", lambda e: self.file_canvas.itemconfig(self.canvas_window, width=e.width))
 
         # Set plot title
         set_title = ttk.Frame(middle_frame)
@@ -271,8 +281,16 @@ class FilePlotApp:
         # Create one checkbox per file
         for file_path in self.file_paths:
             var = tk.BooleanVar(value=True)  # checked by default
-            cb = ttk.Checkbutton(self.file_check_frame, text=os.path.basename(file_path), variable=var)
-            cb.pack(anchor="w", padx=4, pady=2)
+
+            # --- UPDATED: Slightly longer truncation limit ---
+            file_name = os.path.basename(file_path)
+            display_name = file_name if len(file_name) <= 38 else file_name[:35] + "..."
+
+            cb = ttk.Checkbutton(self.file_check_frame, text=display_name, variable=var)
+
+            # --- UPDATED: Added fill="x" and expand=True ---
+            cb.pack(anchor="w", fill="x", expand=True, padx=4, pady=2)
+
             self.file_vars.append(var)
 
     def plot_selected(self):
@@ -414,7 +432,11 @@ class FilePlotApp:
             header_frame = ttk.Frame(frame)
             header_frame.grid(row=current_row, column=0, columnspan=2, sticky="w", pady=(10, 4))
             tk.Label(header_frame, background=colour, width=2, height=1).pack(side="left", padx=(0, 6))
-            ttk.Label(header_frame, text=file_name, font=("", 10, "bold italic")).pack(side="left")
+            # ttk.Label(header_frame, text=file_name, font=("", 10, "bold italic")).pack(side="left")
+            # current_row += 1
+
+            display_header = file_name if len(file_name) <= 40 else file_name[:37] + "..."
+            ttk.Label(header_frame, text=display_header, font=("", 10, "bold italic")).pack(side="left")
             current_row += 1
 
             # Stat rows
@@ -459,7 +481,12 @@ class FilePlotApp:
                 )
                 if path:
                     self._sim_param_files[i] = path
-                    lbl.config(text=os.path.basename(path), foreground="black")
+
+                    # --- NEW: Truncate the uploaded sim file name ---
+                    sim_name = os.path.basename(path)
+                    display_sim = sim_name if len(sim_name) <= 22 else sim_name[:19] + "..."
+
+                    lbl.config(text=display_sim, foreground="black")
                     gb.config(state="normal")
 
             ttk.Button(btn_frame, text="Upload Sim Params", command=_upload_sim).pack(side="left", padx=(0, 8))
