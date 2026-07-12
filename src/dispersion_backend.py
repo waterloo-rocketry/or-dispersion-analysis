@@ -289,7 +289,7 @@ def _extract_columns(data):
 
 # ── Shared plotting function ──────────────────────────────────────────────
 
-def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence):
+def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence, plot_top_outliers=True):
     """
     Core logic to populate a matplotlib Axes object with the dispersion data.
     Plots all files: rocket and payload scatter points plus optional ellipses onto ax.
@@ -329,6 +329,46 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                 alpha=0.7,
                 label=f"{label}"
             )
+
+            if plot_top_outliers:
+                # Calculate distances of all points from the launch pad
+                distances = haversine_nm(launch_lat, launch_lon, rocket_latitude, rocket_longitude)
+                top_50 = distances.nlargest(100)
+
+                # Hardcode the exact string name of the column
+                sim_col = 'Simulation'
+
+                # Dictionary to track the frequency of specific dates
+                outlier_dates = {}
+
+                for idx in top_50.index:
+                    # np.atleast_1d safeguards against duplicate indices returning a Series
+                    pt_lat = float(np.atleast_1d(rocket_latitude.loc[idx])[0])
+                    pt_lon = float(np.atleast_1d(rocket_longitude.loc[idx])[0])
+
+                    # Fetch sim name safely using the string column name
+                    raw_val = data[sim_col].loc[idx]
+                    sim_name = str(np.atleast_1d(raw_val)[0])
+
+                    # Extract just the date by splitting the string at the space
+                    # "2021-08-12 17:00:00+00:00" -> "2021-08-12"
+                    sim_date = sim_name.split(" ")[0]
+
+                    # Track duplicates by incrementing the count for this date
+                    if sim_date in outlier_dates:
+                        outlier_dates[sim_date] += 1
+                    else:
+                        outlier_dates[sim_date] = 1
+
+                    # Draw highlight circle
+                    ax.scatter(pt_lon, pt_lat, facecolors="none", edgecolors="xkcd:dandelion", s=60, linewidths=1.5,
+                               zorder=5)
+
+                # Print the summary to the console after the loop finishes
+                print(f"\n--- Outlier Dates Summary ({label}) ---")
+                for date, count in sorted(outlier_dates.items()):
+                    print(f"Date: {date} | Outliers: {count}")
+                print("-" * 40 + "\n")
 
         if payload_longitude is not None:
             ax.scatter(
@@ -466,17 +506,17 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
 
 # ── Public plotting functions ─────────────────────────────────────────────────
 
-def plot_data(file_paths, plot_title, fig, ax, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95):
+def plot_data(file_paths, plot_title, fig, ax, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95, plot_top_outliers=True):
     """Updates the Tkinter UI plot."""
     ax.clear()
-    draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence)
+    draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence, plot_top_outliers)
 
 
-def save_plot(file_paths, plot_title, output_path: str | None = None, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95):
+def save_plot(file_paths, plot_title, output_path: str | None = None, plot_LC_ellipse=True, plot_sigma_ellipses=False, plot_confidence_ellipse=False, confidence=0.95, plot_top_outliers=True):
     """Saves a high-resolution plot bypassing Tkinter display quirks."""
     set_default_style()
     dispersion_plot, axes = plt.subplots(figsize=(10, 8))
-    draw_plot_elements(axes, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence)
+    draw_plot_elements(axes, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse, confidence, plot_top_outliers)
     dispersion_plot.tight_layout()
 
     # Choose filename

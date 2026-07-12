@@ -160,7 +160,7 @@ def store_launch_information(outlier_indices,
     for idx in outlier_indices:
         wind_profile = {}
         max_speed = {}
-        max_speed["speed"] = general_df.loc[idx, "Max Windspeed (mph)"]
+        max_speed["speed"] = general_df.loc[idx, "Max Windspeed (kts)"]
         max_speed["direction"] = general_df.loc[idx, "Wind Direction (deg)"]
 
         #Names of the columns

@@ -157,21 +157,24 @@ class FilePlotApp:
         self.plot_LC_ellipse =           tk.BooleanVar(value=True)
         self.plot_sigma_ellipses =       tk.BooleanVar(value=False)
         self.plot_confidence_ellipse =   tk.BooleanVar(value=False)
+        self.plot_top_outliers =         tk.BooleanVar(value=True)
 
         self.LC_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot LC Ellipse", variable=self.plot_LC_ellipse)
         self.sigma_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Sigma Ellipses", variable=self.plot_sigma_ellipses)
         self.confidence_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Confidence Ellipse", variable=self.plot_confidence_ellipse)
+        self.top_outliers_box = ttk.Checkbutton(checkbox_stack, text="Highlight Top 10 Outliers", variable=self.plot_top_outliers)
 
         self.LC_ellipse_box.grid(row=0, column=0, sticky="w", padx=4, pady=(12,2))
         self.sigma_ellipse_box.grid(row=1, column=0, sticky="w", padx=4, pady=2)
         self.confidence_ellipse_box.grid(row=2, column=0, sticky="w", padx=4, pady=(2,0))
+        self.top_outliers_box.grid(row=3, column=0, sticky="w", padx=4, pady=(2, 0))
 
         self.confidence_level = tk.StringVar(value="0.95")
         self.confidence_label = ttk.Label(checkbox_stack, text="Confidence level (e.g. 0.95):")
         self.confidence_entry = ttk.Entry(checkbox_stack, textvariable=self.confidence_level, width=10)
 
-        self.confidence_label.grid(row=3, column=0, sticky="w", padx=8, pady=(6,0))
-        self.confidence_entry.grid(row=3, column=0, sticky="e", padx=8, pady=(6,0))
+        self.confidence_label.grid(row=4, column=0, sticky="w", padx=8, pady=(6,0))
+        self.confidence_entry.grid(row=4, column=0, sticky="e", padx=8, pady=(6,0))
         self.confidence_label.grid_remove()
         self.confidence_entry.grid_remove()
 
@@ -233,7 +236,7 @@ class FilePlotApp:
         Adds a trace to provided variables to track changes from user.
         :return:
         """
-        for var in (self.plot_LC_ellipse, self.plot_sigma_ellipses, self.plot_confidence_ellipse, self.plot_title):
+        for var in (self.plot_LC_ellipse, self.plot_sigma_ellipses, self.plot_confidence_ellipse, self.plot_top_outliers, self.plot_title):
             try:
                 var.trace_add('write', lambda *a, v=var: self._on_plot_option_changed())
             except AttributeError:
@@ -341,7 +344,8 @@ class FilePlotApp:
                 plot_LC_ellipse=LC_flag,
                 plot_sigma_ellipses=sigma_flag,
                 plot_confidence_ellipse=confidence_flag,
-                confidence=confidence_level
+                confidence=confidence_level,
+                plot_top_outliers=self.plot_top_outliers.get()
             )
             self.fig.tight_layout()
             self.canvas.draw()
@@ -596,7 +600,9 @@ class FilePlotApp:
                 plot_LC_ellipse=LC_flag,
                 plot_sigma_ellipses=sigma_flag,
                 plot_confidence_ellipse=confidence_flag,
-                confidence=confidence_level)
+                confidence=confidence_level,
+                plot_top_outliers=self.plot_top_outliers.get()
+            )
             self.status_var.set(f"Plot saved: '{self.plot_title.get()}'")
 
         except Exception as error:
