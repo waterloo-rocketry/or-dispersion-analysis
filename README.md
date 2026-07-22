@@ -1,4 +1,5 @@
-# OpenRocket Dispersion Analysis
+# Project Atlas
+## OpenRocket Dispersion Analysis Tool
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)]()
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)]()
@@ -10,7 +11,8 @@ This repository provides a streamlined data pipeline to evaluate trajectory vari
 ## Features
 
 - **Automated Data Ingestion:** Rapidly parses bulk `.csv` outputs from OpenRocket Monte Carlo runs.
-- **Landing Footprint Mapping:** Plots 2D scatter maps of projected landing coordinates to assess downrange and crossrange drift for recovery operations.
+- **Landing Footprint Mapping:** Plots 2D scatter maps of projected landing coordinates to assess downrange and crossrange drift for recovery operations. Visual analysis options include user-specified confidence ellipses, 1-sigma and 2-sigma dispersion ellipses, and highlighted outlier datapoints.
+- **Outlier Analysis:** Identifies outlier simulations outside of Launch Canada's 10nm dispersion radius; analysis of weather conditions resulting in outlier datapoints can also be conducted using this tool.
 
 ## Tech Stack
 
