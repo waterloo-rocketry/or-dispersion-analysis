@@ -1,24 +1,15 @@
 import os
 import tkinter as tk
 import matplotlib.pyplot as plt
+
+from matplotlib.figure import Figure
 from matplotlib.colors import to_hex
+from tkinter import ttk, filedialog, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 
-from dispersion_backend import plot_data
-from dispersion_backend import save_plot
-from dispersion_backend import set_default_style
-from dispersion_backend import make_safe_filename
-from dispersion_backend import get_colors
-
-from statistics_backend import sort_outliers_winds
-from statistics_backend import store_launch_information
-from statistics_backend import get_outlier_indices
-from statistics_backend import coordinate_stats
-from statistics_backend import plotting_top_outliers
-from statistics_backend import all_names
-
-from tkinter import ttk, filedialog, messagebox
-
+from data_engine import all_names, coordinate_stats, analyze_outlier_winds
+from plotting import (get_colors, make_safe_filename, plot_data, save_plot, set_default_style,
+                      plot_outlier_analysis, TOP_OUTLIERS_COUNT)
 
 class FilePlotApp:
     def __init__(self, root, initial_dir=None):
@@ -32,8 +23,8 @@ class FilePlotApp:
         self.initial_dir = initial_dir or "."
         self.file_paths = []
         self.launch_names = []
-        self.file_vars = [] # New, helps track the selected / deselected file paths
-
+        self.file_vars = []
+        self.outlier_date_summary = {}
         self._build_ui()
         self._setup_matplotlib()
 
@@ -65,8 +56,7 @@ class FilePlotApp:
         # Create status_var early so init-time callbacks can use it
         self.status_var = tk.StringVar(value="Ready")
 
-        # Hi Adrien made this
-        self.sim_param_files_selected = None
+        # self.sim_param_files_selected = None
 
         # Allow main window to expand
         self.root.columnconfigure(0, weight=1)
@@ -79,8 +69,8 @@ class FilePlotApp:
         middle_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
 
         # Let left (buttons/files) and right (plot) share space dynamically
-        middle_frame.columnconfigure(0, weight=1, minsize=200)
-        middle_frame.columnconfigure(1, weight=4)
+        middle_frame.columnconfigure(0, weight=0, minsize=120)
+        middle_frame.columnconfigure(1, weight=1)
         middle_frame.rowconfigure(0, weight=0)
         middle_frame.rowconfigure(1, weight=1)
         middle_frame.rowconfigure(2, weight=0)
@@ -125,19 +115,19 @@ class FilePlotApp:
         # This inner frame is what actually holds the checkboxes
         self.file_check_frame = ttk.Frame(self.file_canvas)
 
-        # --- NEW: Save the window ID to a variable ---
+        # Save the window ID to a variable
         self.canvas_window = self.file_canvas.create_window((0, 0), window=self.file_check_frame, anchor="nw")
 
         # This line makes the scroll region update whenever checkboxes are added
         self.file_check_frame.bind("<Configure>", lambda e: self.file_canvas.configure(
             scrollregion=self.file_canvas.bbox("all")))
 
-        # --- NEW: Force the inner frame to be at least as wide as the canvas ---
+        # Force the inner frame to be at least as wide as the canvas
         self.file_canvas.bind("<Configure>", lambda e: self.file_canvas.itemconfig(self.canvas_window, width=e.width))
 
         # Set plot title
         set_title = ttk.Frame(middle_frame)
-        set_title.grid(row=2, column=0, sticky="nsew", padx=(0,8), pady=(6,6))
+        set_title.grid(row=2, column=0, sticky="nsew", padx=(0, 8), pady=(6, 6))
         set_title.columnconfigure(0, weight=1)
         set_title.rowconfigure((0, 1), weight=0)
 
@@ -150,31 +140,35 @@ class FilePlotApp:
 
         # Configurable inputs for plots
         checkbox_stack = ttk.Frame(middle_frame)
-        checkbox_stack.grid(row=3, column=0, sticky="nsew", padx=(0,8), pady=(0,6))
+        checkbox_stack.grid(row=3, column=0, sticky="nsew", padx=(0, 8), pady=(0, 6))
         checkbox_stack.columnconfigure(0, weight=1)
         checkbox_stack.rowconfigure((0, 1, 2, 3), weight=0)
 
-        self.plot_LC_ellipse =           tk.BooleanVar(value=True)
-        self.plot_sigma_ellipses =       tk.BooleanVar(value=False)
-        self.plot_confidence_ellipse =   tk.BooleanVar(value=False)
-        self.plot_top_outliers =         tk.BooleanVar(value=True)
+        self.plot_LC_ellipse = tk.BooleanVar(value=True)
+        self.plot_sigma_ellipses = tk.BooleanVar(value=False)
+        self.plot_confidence_ellipse = tk.BooleanVar(value=False)
+        self.plot_top_outliers = tk.BooleanVar(value=True)
 
         self.LC_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot LC Ellipse", variable=self.plot_LC_ellipse)
-        self.sigma_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Sigma Ellipses", variable=self.plot_sigma_ellipses)
-        self.confidence_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Confidence Ellipse", variable=self.plot_confidence_ellipse)
-        self.top_outliers_box = ttk.Checkbutton(checkbox_stack, text="Highlight Top 10 Outliers", variable=self.plot_top_outliers)
+        self.sigma_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Sigma Ellipses",
+                                                 variable=self.plot_sigma_ellipses)
+        self.confidence_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Confidence Ellipse",
+                                                      variable=self.plot_confidence_ellipse)
+        self.top_outliers_box = ttk.Checkbutton(
+            checkbox_stack, text=f"Highlight Top {TOP_OUTLIERS_COUNT} Outliers",
+            variable=self.plot_top_outliers)
 
-        self.LC_ellipse_box.grid(row=0, column=0, sticky="w", padx=4, pady=(12,2))
+        self.LC_ellipse_box.grid(row=0, column=0, sticky="w", padx=4, pady=(12, 2))
         self.sigma_ellipse_box.grid(row=1, column=0, sticky="w", padx=4, pady=2)
-        self.confidence_ellipse_box.grid(row=2, column=0, sticky="w", padx=4, pady=(2,0))
+        self.confidence_ellipse_box.grid(row=2, column=0, sticky="w", padx=4, pady=(2, 0))
         self.top_outliers_box.grid(row=3, column=0, sticky="w", padx=4, pady=(2, 0))
 
         self.confidence_level = tk.StringVar(value="0.95")
         self.confidence_label = ttk.Label(checkbox_stack, text="Confidence level (e.g. 0.95):")
         self.confidence_entry = ttk.Entry(checkbox_stack, textvariable=self.confidence_level, width=10)
 
-        self.confidence_label.grid(row=4, column=0, sticky="w", padx=8, pady=(6,0))
-        self.confidence_entry.grid(row=4, column=0, sticky="e", padx=8, pady=(6,0))
+        self.confidence_label.grid(row=4, column=0, sticky="w", padx=8, pady=(6, 0))
+        self.confidence_entry.grid(row=4, column=0, sticky="e", padx=8, pady=(6, 0))
         self.confidence_label.grid_remove()
         self.confidence_entry.grid_remove()
 
@@ -194,22 +188,25 @@ class FilePlotApp:
         self.root.update_idletasks()
         self.root.minsize(700, 400)
 
+
     def _setup_matplotlib(self):
         """
         Creates matplotlib Figure + Axes and embeds into Tkinter.
-        :return:
         """
         set_default_style()
-        self.fig, self.ax = plt.subplots(figsize=(10, 8), dpi=50)
+
+        self.fig = Figure(figsize=(10, 8), dpi=50)
+        self.ax = self.fig.add_subplot(111)
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_container)
         self.canvas_widget = self.canvas.get_tk_widget()
         self.canvas_widget.grid(row=0, column=0, sticky="nsew")
 
-        # Navigation toolbar
         toolbar_frame = ttk.Frame(self.plot_container)
         toolbar_frame.grid(row=1, column=0, sticky="ew")
         nav = NavigationToolbar2Tk(self.canvas, toolbar_frame)
         nav.update()
+
 
     def _on_plot_option_changed(self):
         """
@@ -217,6 +214,7 @@ class FilePlotApp:
         :return:
         """
         self.status_var.set("Plot options changed — press 'Plot' to apply")
+
 
     def _toggle_confidence_entry(self):
         """
@@ -230,6 +228,7 @@ class FilePlotApp:
             self.confidence_label.grid_remove()
             self.confidence_entry.grid_remove()
         self._on_plot_option_changed()
+
 
     def _register_input_traces(self):
         """
@@ -249,27 +248,22 @@ class FilePlotApp:
 
         self._toggle_confidence_entry()
 
+
     def select_files(self):
         """
         Function enabling user-selected files using filedialog.
         :return:
         """
-        # Open file dialog; allow multiple selection
         files = filedialog.askopenfilenames(
-            parent=self.root,
-            title="Select files to plot",
-            initialdir=self.initial_dir,
+            parent=self.root, title="Select files to plot", initialdir=self.initial_dir,
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
         )
         if not files:
-            self.status_var.set("No files selected")
             return
-
-        # Convert to list and update internal state & UI
         self.file_paths = list(files)
         self.launch_names = list(all_names(self.file_paths))
         self._refresh_file_listbox()
-        self.status_var.set(f"Selected {len(self.file_paths)} files")
+
 
     def _refresh_file_listbox(self):
         """
@@ -283,18 +277,45 @@ class FilePlotApp:
 
         # Create one checkbox per file
         for file_path in self.file_paths:
-            var = tk.BooleanVar(value=True)  # checked by default
+            var = tk.BooleanVar(value=True)
 
-            # --- UPDATED: Slightly longer truncation limit ---
             file_name = os.path.basename(file_path)
             display_name = file_name if len(file_name) <= 38 else file_name[:35] + "..."
 
             cb = ttk.Checkbutton(self.file_check_frame, text=display_name, variable=var)
-
-            # --- UPDATED: Added fill="x" and expand=True ---
             cb.pack(anchor="w", fill="x", expand=True, padx=4, pady=2)
 
             self.file_vars.append(var)
+
+
+    def _get_validated_confidence(self, confidence_flag):
+        """
+        Validates and returns the user-entered confidence level as a float in (0, 1).
+        Returns the default (0.95) if the checkbox is unset or the field is blank.
+        Shows an error dialog and returns None if the entered value is invalid,
+        so callers can bail out early rather than crashing on a bad float() cast.
+        :param confidence_flag: bool, whether the confidence ellipse checkbox is checked
+        :return:                validated float, or None if invalid (error dialog already shown)
+        """
+        if not confidence_flag:
+            return 0.95
+
+        value = (self.confidence_level.get() or "").strip()
+        if not value:
+            return 0.95
+
+        try:
+            confidence_level = float(value)
+            if not (0.0 < confidence_level < 1.0):
+                raise ValueError("Confidence level must be between 0 and 1 (exclusive).")
+            return confidence_level
+        except Exception as e:
+            messagebox.showerror(
+                title="Invalid confidence level",
+                message=f"Please enter a valid confidence value between 0 and 1 (e.g. 0.95).\n\nError: {e}")
+            self.status_var.set("Invalid confidence value")
+            return None
+
 
     def plot_selected(self):
         """
@@ -307,108 +328,30 @@ class FilePlotApp:
             messagebox.showwarning("No files checked", "Please check at least one file to plot.")
             return
 
-        try:
-            # clear axes, call user plotting routine, draw canvas
-            self.ax.clear()
-
-            LC_flag = self.plot_LC_ellipse.get()
-            sigma_flag = self.plot_sigma_ellipses.get()
-            confidence_flag = self.plot_confidence_ellipse.get()
-
-            # Validate confidence level if checkbox is set
-            confidence_level = None
-            if confidence_flag:
-                value = (self.confidence_level.get() or "").strip()
-                if not value:
-                    confidence_level = 0.95  # default value
-                else:
-                    try:
-                        confidence_level = float(value)
-                        if not (0.0 < confidence_level < 1.0):
-                            raise ValueError("Confidence level must be between 0 and 1 (exclusive).")
-                    except Exception as e:
-                        messagebox.showerror("Invalid confidence level",
-                                             f"Please enter a valid confidence value between 0 and 1 (e.g. 0.95).\n\nError: {e}")
-                        self.status_var.set("Invalid confidence value")
-                        return
-
-            print("active_paths:", self.active_paths)
-            print("file_vars:", [v.get() for v in self.file_vars])
-            print("file_paths:", self.file_paths)
-
-            plot_data(
-                file_paths=self.active_paths,
-                plot_title=self.plot_title.get(),
-                fig=self.fig,
-                ax=self.ax,
-                plot_LC_ellipse=LC_flag,
-                plot_sigma_ellipses=sigma_flag,
-                plot_confidence_ellipse=confidence_flag,
-                confidence=confidence_level,
-                plot_top_outliers=self.plot_top_outliers.get()
-            )
-            self.fig.tight_layout()
-            self.canvas.draw()
-            self.status_var.set("Plotted selected files")
-            self._show_stats_window() # This is the new window that Adrien is working on
-        except Exception as error:
-            messagebox.showerror("Plot error", f"An error occurred while plotting:\n{error}")
-            self.status_var.set("Plot error")
-
-    def _select_sim_param_files(self):
-        files = filedialog.askopenfilenames(
-            parent=self.root,
-            title="Select files to analyze",
-            initialdir=self.initial_dir,
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
-        if not files:
-            messagebox.showwarning("Upload Simulation Parameters",
-                                   "Please upload all Simulation Parameter files to chart.")
-            self.sim_param_files_selected = False
+        LC_flag = self.plot_LC_ellipse.get()
+        sigma_flag = self.plot_sigma_ellipses.get()
+        confidence_flag = self.plot_confidence_ellipse.get()
+        confidence_level = self._get_validated_confidence(confidence_flag)
+        if confidence_level is None:
             return
 
-        self.sim_param_paths = list(files)
-        self.sim_param_files_selected = True  # ← removed _refresh_file_listbox() call
+        self.outlier_date_summary = plot_data(
+            file_paths=self.active_paths,
+            plot_title=self.plot_title.get(),
+            fig=self.fig,
+            ax=self.ax,
+            plot_LC_ellipse=LC_flag,
+            plot_sigma_ellipses=sigma_flag,
+            plot_confidence_ellipse=confidence_flag,
+            confidence=confidence_level,
+            plot_top_outliers=self.plot_top_outliers.get()
+        ) or {}
+        self.fig.tight_layout()
+        self.canvas.draw()
+        self._show_stats_window()
 
-    def _create_wind_altitude_window(self):
-        if hasattr(self, '_wind_altitude_window') and self._wind_altitude_window.winfo_exists():
-            self._wind_altitude_window.destroy()
-
-        if not self.sim_param_files_selected:
-            messagebox.showwarning("No simulation parameter files selected")
-            return None
-
-        #Need to fix the name
-        self._wind_altitude_window = tk.Toplevel(self.root)
-        self._wind_altitude_window.title(f"Wind-Altitude Breakdown")
-        self._wind_altitude_window.resizable(True, True)
-
-        frame = ttk.Frame(self._wind_altitude_window, padding=12)
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-
-        # Calling of the outliers backend functions
-        outlier_indices = get_outlier_indices(self.active_paths[0])  # or whichever file is relevant
-        launch_data = store_launch_information(outlier_indices, sim_parameters_file=self.sim_param_paths[0], historical_file=self.active_paths[0])
-        sorted_by_max_speed, sorted_by_avg_speed = sort_outliers_winds(launch_data)
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize=(14, 7))
-        plotting_top_outliers(sorted_by_max_speed, sorted_by_avg_speed, ax1=ax1, ax2=ax2)
-        self._wind_fig = fig
-
-        frame.pack(fill="both", expand=True)
-
-        canvas = FigureCanvasTkAgg(self._wind_fig, master=frame)
-        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        canvas.draw()
-
-        # ADD: NavigationToolbar2Tk in a toolbar_frame below the canvas, same as _setup_matplotlib
-
-        # BIND: self._wind_altitude_window.protocol("WM_DELETE_WINDOW", lambda: [plt.close(self._wind_fig), self._wind_altitude_window.destroy()])
 
     def _show_stats_window(self):
-        # Guard against duplicate windows
         if hasattr(self, '_stats_win') and self._stats_win.winfo_exists():
             self._stats_win.destroy()
 
@@ -419,127 +362,152 @@ class FilePlotApp:
         frame = ttk.Frame(self._stats_win, padding=12)
         frame.pack(fill="both", expand=True)
 
-        raw_colours, _ = get_colors(self.file_paths)
+        raw_colours, _ = get_colors(self.active_paths)
         colours = [to_hex(c) for c in raw_colours]
-        current_row = 0
-
-        self._sim_param_files = {}  # key: i -> sim_params path
+        self._sim_param_files = {}
 
         for i, file_path in enumerate(self.active_paths):
             stats = coordinate_stats(file_path)
             file_name = os.path.basename(file_path)
-            colour = colours[i]
-
+            display_header = file_name if len(file_name) <= 40 else file_name[:37] + "..."
             self._sim_param_files[i] = None
 
-            # Header row: colour box + filename
+            # Header
             header_frame = ttk.Frame(frame)
-            header_frame.grid(row=current_row, column=0, columnspan=2, sticky="w", pady=(10, 4))
-            tk.Label(header_frame, background=colour, width=2, height=1).pack(side="left", padx=(0, 6))
-            # ttk.Label(header_frame, text=file_name, font=("", 10, "bold italic")).pack(side="left")
-            # current_row += 1
-
-            display_header = file_name if len(file_name) <= 40 else file_name[:37] + "..."
+            header_frame.pack(fill="x", pady=(10, 4))
+            tk.Label(header_frame, background=colours[i], width=2, height=1).pack(side="left", padx=(0, 6))
             ttk.Label(header_frame, text=display_header, font=("", 10, "bold italic")).pack(side="left")
-            current_row += 1
 
-            # Stat rows
+            # Stats Grid Layout
+            grid_frame = ttk.Frame(frame)
+            grid_frame.pack(fill="x", padx=16)
+
             rows = [
                 ("Total Simulations", f"{stats.total_simulations}"),
                 ("Mean Apogee", f"{stats.mean_apogee:,} ft"),
                 ("Std Dev Apogee", f"{stats.std_apogee:.1f} ft"),
-                ("Mean Landing Distance", f"{stats.mean_landing_distance:.1f} miles"),
-                ("Std Dev Landing Dist.", f"{stats.std_landing_distance:.1f} miles"),
-                ("Max Landing Distance", f"{stats.max_landing_distance:.1f} miles"),
+                ("Mean Landing Distance", f"{stats.mean_landing_distance:.1f} NM"),
+                ("Std Dev Landing Dist.", f"{stats.std_landing_distance:.1f} NM"),
+                ("Max Landing Distance", f"{stats.max_landing_distance:.1f} NM"),
                 ("Accuracy (within 10 NM)", f"{stats.accuracy_launches * 100:.1f}%"),
                 ("Mean Min Stability", f"{stats.mean_min_stability:.3f}"),
                 ("Mean Lateral Velocity", f"{stats.mean_lateral_velocity:.2f} m/s"),
                 ("Mean Wind Speed", f"{stats.mean_wind_speed:.2f} mph"),
             ]
 
-            for label, value in rows:
-                ttk.Label(frame, text=label, anchor="w").grid(row=current_row, column=0, sticky="w", pady=2,
-                                                              padx=(0, 16))
-                ttk.Label(frame, text=value, anchor="e", font=("", 10, "bold")).grid(row=current_row, column=1,
-                                                                                     sticky="e", pady=2)
-                current_row += 1
+            for row_idx, (label, value) in enumerate(rows):
+                ttk.Label(grid_frame, text=label).grid(row=row_idx, column=0, sticky="w", pady=2)
+                ttk.Label(grid_frame, text=value, font=("", 10, "bold")).grid(row=row_idx, column=1, sticky="e", pady=2, padx=(20, 0))
 
-            # ── Per-block upload + graph buttons ────────────────────
+            # Buttons
             btn_frame = ttk.Frame(frame)
-            btn_frame.grid(row=current_row, column=0, columnspan=2, sticky="ew", pady=(8, 2))
+            btn_frame.pack(fill="x", pady=(8, 8))
 
             sim_label = ttk.Label(btn_frame, text="No file", foreground="grey", font=("", 8))
-
             graph_btn = ttk.Button(
-                btn_frame,
-                text="Plot Wind-Altitude Chart",
-                state="disabled",
-                command=lambda i=i, fp=file_path: self._run_outlier_graph(i, fp)
+                btn_frame, text="Plot Wind-Altitude Chart", state="disabled",
+                command=lambda idx=i, fp=file_path: self._run_outlier_graph(idx, fp)
             )
 
-            def _upload_sim(i=i, lbl=sim_label, gb=graph_btn):
-                path = filedialog.askopenfilename(
-                    parent=self._stats_win,
-                    title="Select Sim Parameters CSV",
-                    filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-                )
+            def _upload_sim(idx=i, lbl=sim_label, gb=graph_btn):
+                path = filedialog.askopenfilename(parent=self._stats_win, title="Select Sim Parameters CSV")
                 if path:
-                    self._sim_param_files[i] = path
-
-                    # --- NEW: Truncate the uploaded sim file name ---
+                    self._sim_param_files[idx] = path
                     sim_name = os.path.basename(path)
-                    display_sim = sim_name if len(sim_name) <= 22 else sim_name[:19] + "..."
-
-                    lbl.config(text=display_sim, foreground="black")
+                    lbl.config(text=sim_name if len(sim_name) <= 22 else sim_name[:19] + "...", foreground="black")
                     gb.config(state="normal")
 
             ttk.Button(btn_frame, text="Upload Sim Params", command=_upload_sim).pack(side="left", padx=(0, 8))
             sim_label.pack(side="left", padx=(0, 16))
             graph_btn.pack(side="left")
 
-            current_row += 1
-            # ────────────────────────────────────────────────────────
-
-            # Divider between files, skip on last file
             if file_path != self.active_paths[-1]:
-                ttk.Separator(frame, orient="horizontal").grid(
-                    row=current_row, column=0, columnspan=2, sticky="ew", pady=6)
-                current_row += 1
+                ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=6)
+
 
     def _run_outlier_graph(self, i, hist_path):
+        """Builds a divided window with overlay plotting and statistical analysis."""
         sim_path = self._sim_param_files[i]
-
-        # Guard against duplicate windows per block
         win_attr = f'_wind_win_{i}'
+
         if hasattr(self, win_attr) and getattr(self, win_attr).winfo_exists():
             getattr(self, win_attr).destroy()
 
         win = tk.Toplevel(self.root)
-        win.title(f"Wind-Altitude Breakdown — {os.path.basename(hist_path)}")
-        win.resizable(True, True)
+        win.title(f"Outlier Wind Analysis — {os.path.basename(hist_path)}")
+        win.geometry("1050x650")
         setattr(self, win_attr, win)
 
-        frame = ttk.Frame(win, padding=12)
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        frame.pack(fill="both", expand=True)
+        # Structure window: Left (Plot 75%), Right (Sidebar 25%)
+        main_frame = ttk.Frame(win, padding=12)
+        main_frame.pack(fill="both", expand=True)
+        main_frame.columnconfigure(0, weight=3)
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(0, weight=1)
 
-        outlier_indices = get_outlier_indices(hist_path)
-        launch_data = store_launch_information(outlier_indices, sim_path, hist_path)
-        sorted_max, sorted_avg = sort_outliers_winds(launch_data)
+        plot_frame = ttk.Frame(main_frame)
+        plot_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize=(14, 7))
-        plotting_top_outliers(sorted_max, sorted_avg, ax1=ax1, ax2=ax2)
+        stats_frame = ttk.LabelFrame(main_frame, text="Outlier Analytics", padding=14)
+        stats_frame.grid(row=0, column=1, sticky="nsew")
 
-        canvas = FigureCanvasTkAgg(fig, master=frame)
-        canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        outliers, summary = analyze_outlier_winds(hist_path, sim_path)
+
+        # Wind-based Outlier Stats (its own sub-frame so its grid layout
+        # doesn't conflict with the pack-based layout used for the section below)
+        wind_stats_frame = ttk.Frame(stats_frame)
+        wind_stats_frame.pack(fill="x")
+
+        if summary.get("total_outliers", 0) > 0:
+            stats_data = [
+                ("Total Outliers Detected", f"{summary['total_outliers']} flights"),
+                ("Worst Shear Altitude", f"{summary['overall_max_speed_alt']:,} m"),
+                ("Peak Avg Layer Speed", f"{summary['overall_max_speed']:.1f} kn"),
+            ]
+
+            for row_idx, (label, val) in enumerate(stats_data):
+                ttk.Label(wind_stats_frame, text=label, foreground="grey").grid(row=row_idx * 2, column=0, sticky="w", pady=(12, 0))
+                ttk.Label(wind_stats_frame, text=val, font=("", 14, "bold")).grid(row=row_idx * 2 + 1, column=0, sticky="w", pady=(0, 4))
+
+        else:
+            ttk.Label(wind_stats_frame, text="No outliers >10 NM found.", font=("", 10, "italic")).pack(pady=20)
+
+        # Top-Outlier Landing Dates (from the main dispersion plot's
+        # outlier highlighting) - shown here instead of printed to the console
+        outlier_dates = self.outlier_date_summary.get(hist_path, {})
+        if outlier_dates:
+            ttk.Separator(stats_frame, orient="horizontal").pack(fill="x", pady=(16, 8))
+            dates_frame = ttk.Frame(stats_frame)
+            dates_frame.pack(fill="x")
+
+            ttk.Label(dates_frame, text=f"Top {TOP_OUTLIERS_COUNT} Outlier Landing Dates",
+                     foreground="grey").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+
+            for row_idx, (date, count) in enumerate(sorted(outlier_dates.items()), start=1):
+                ttk.Label(dates_frame, text=date).grid(row=row_idx, column=0, sticky="w", pady=1)
+                ttk.Label(dates_frame, text=f"{count}", font=("", 10, "bold")).grid(
+                    row=row_idx, column=1, sticky="e", padx=(20, 0), pady=1)
+
+        # Render Plot
+        fig = Figure(figsize=(8, 6))
+        ax = fig.add_subplot(111)
+
+        plot_outlier_analysis(ax, outliers, summary)
+
+        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
+        canvas.get_tk_widget().pack(fill="both", expand=True)
         canvas.draw()
 
-        toolbar_frame = ttk.Frame(frame)
-        toolbar_frame.grid(row=1, column=0, sticky="ew")
+        toolbar_frame = ttk.Frame(plot_frame)
+        toolbar_frame.pack(fill="x", side="bottom")
         NavigationToolbar2Tk(canvas, toolbar_frame).update()
 
-        win.protocol("WM_DELETE_WINDOW", lambda: [plt.close(fig), win.destroy()])
+        def on_close():
+            fig.clear()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
 
     def save_file(self):
         """
@@ -555,22 +523,9 @@ class FilePlotApp:
             sigma_flag = self.plot_sigma_ellipses.get()
             confidence_flag = self.plot_confidence_ellipse.get()
 
-            # Validate confidence level if checkbox is set
-            confidence_level = None
-            if confidence_flag:
-                value = (self.confidence_level.get() or "").strip()
-                if not value:
-                    confidence_level = 0.95  # default value
-                else:
-                    try:
-                        confidence_level = float(value)
-                        if not (0.0 < confidence_level < 1.0):
-                            raise ValueError("Confidence level must be between 0 and 1 (exclusive).")
-                    except Exception as e:
-                        messagebox.showerror("Invalid confidence level",
-                                             f"Please enter a valid confidence value between 0 and 1 (e.g. 0.95).\n\nError: {e}")
-                        self.status_var.set("Invalid confidence value")
-                        return
+            confidence_level = self._get_validated_confidence(confidence_flag)
+            if confidence_level is None:
+                return
 
             plot_title = self.plot_title.get()
             default_name = make_safe_filename(plot_title).name
@@ -582,14 +537,17 @@ class FilePlotApp:
                 filetypes=[("PNG image", "*.png"), ("JPEG image", "*.jpg;*.jpeg"), ("All files", "*.*")]
             )
 
-            # If user cancelled the dialog, return
+            # If user canceled the dialog, return
             if not save_path:
                 self.status_var.set("Save cancelled")
                 return
 
             # Confirm overwrite if file exists
             if os.path.exists(save_path):
-                if not messagebox.askyesno("Confirm overwrite", f"File already exists:\n{save_path}\n\nOverwrite?"):
+                if not messagebox.askyesno(
+                    title="Confirm overwrite",
+                    message=f"File already exists:\n{save_path}\n\nOverwrite?"
+                ):
                     self.status_var.set("Save cancelled")
                     return
 
@@ -606,8 +564,12 @@ class FilePlotApp:
             self.status_var.set(f"Plot saved: '{self.plot_title.get()}'")
 
         except Exception as error:
-            messagebox.showerror("Plot error", f"An error occurred while plotting:\n{error}")
+            messagebox.showerror(
+                title="Plot error",
+                message=f"An error occurred while plotting:\n{error}"
+            )
             self.status_var.set("Plot error")
+
 
     def clear_all(self):
         """
@@ -623,16 +585,3 @@ class FilePlotApp:
         self.fig.tight_layout()
         self.canvas.draw()
         self.status_var.set("Cleared files and plot")
-
-
-def main():
-    root = tk.Tk()
-
-    initial_dir = "/Users/luca/PycharmProjects/Rocketry Dispersion Zone Analysis/Plugin Exports/"
-    FilePlotApp(root, initial_dir=initial_dir)
-    root.geometry("1200x800")
-    root.mainloop()
-
-
-if __name__ == "__main__":
-    main()
