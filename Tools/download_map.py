@@ -11,7 +11,7 @@ west_lon  = -83.00  # Left edge
 east_lon  = -81.00  # Right edge
 
 # Download and save the raster file
-output_filename = "lc_basemap.tif"
+output_filename = "../LC Geography/lc_basemap.tif"
 
 print(f"Downloading map tiles to {output_filename}...")
 
@@ -25,7 +25,7 @@ try:
         path=output_filename,
         ll=True,
         source=cx.providers.Esri.WorldImagery,
-        zoom=12  # Controls resolution (10 is lower res, 12 is high res)
+        zoom=11  # Controls resolution (10 is lower res, 12 is high res)
     )
     print("Download complete! You can now use this file offline.")
 except Exception as e:
