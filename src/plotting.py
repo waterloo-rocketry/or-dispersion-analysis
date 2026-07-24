@@ -14,7 +14,7 @@ from scipy.stats import chi2
 # Imports from data_engine.py
 from data_engine import generate_labels, _extract_columns, ellipse_math, haversine_nm, ALTITUDES, _read_csv
 
-TOP_OUTLIERS_COUNT  = 10
+TOP_OUTLIERS_COUNT  = 20
 LC_GEOGRAPHY_DIR    = Path("../LC Geography")
 
 
@@ -206,6 +206,14 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
 
         if plot_sigma_ellipses and ellipse_stats is not None:
             mean_x, mean_y, vals, theta = ellipse_stats
+            ax.scatter(
+                mean_x,
+                mean_y,
+                edgecolors="black",
+                color="xkcd:salmon",
+                marker="P",
+                s=80
+            )
             for level, sigma_color in zip([1, 2], sigma_colors):
                 plot_ellipse(
                     x=mean_x,
@@ -222,6 +230,14 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
         if plot_confidence_ellipse and ellipse_stats is not None:
             mean_x, mean_y, vals, theta = ellipse_stats
             chi2_val = chi2.ppf(confidence, 2)
+            ax.scatter(
+                mean_x,
+                mean_y,
+                edgecolors="black",
+                color="xkcd:salmon",
+                marker="P",
+                s=80
+            )
             plot_ellipse(
                 x=mean_x,
                 y=mean_y,

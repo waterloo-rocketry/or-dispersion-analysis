@@ -376,7 +376,7 @@ class FilePlotApp:
             header_frame = ttk.Frame(frame)
             header_frame.pack(fill="x", pady=(10, 4))
             tk.Label(header_frame, background=colours[i], width=2, height=1).pack(side="left", padx=(0, 6))
-            ttk.Label(header_frame, text=display_header, font=("", 10, "bold italic")).pack(side="left")
+            ttk.Label(header_frame, text=display_header, font=("", 11, "bold italic")).pack(side="left")
 
             # Stats Grid Layout
             grid_frame = ttk.Frame(frame)
@@ -389,6 +389,7 @@ class FilePlotApp:
                 ("Mean Landing Distance", f"{stats.mean_landing_distance:.1f} NM"),
                 ("Std Dev Landing Dist.", f"{stats.std_landing_distance:.1f} NM"),
                 ("Max Landing Distance", f"{stats.max_landing_distance:.1f} NM"),
+                ("Avg Landing Coordinates", f"({stats.avg_lat}, {stats.avg_lon})"),
                 ("Accuracy (within 10 NM)", f"{stats.accuracy_launches * 100:.1f}%"),
                 ("Mean Min Stability", f"{stats.mean_min_stability:.3f}"),
                 ("Mean Lateral Velocity", f"{stats.mean_lateral_velocity:.2f} m/s"),
@@ -397,15 +398,16 @@ class FilePlotApp:
 
             for row_idx, (label, value) in enumerate(rows):
                 ttk.Label(grid_frame, text=label).grid(row=row_idx, column=0, sticky="w", pady=2)
-                ttk.Label(grid_frame, text=value, font=("", 10, "bold")).grid(row=row_idx, column=1, sticky="e", pady=2, padx=(20, 0))
+                ttk.Label(grid_frame, text=value, font=("", 11, "bold")).grid(row=row_idx, column=1, sticky="e", pady=2, padx=(20, 0))
 
             # Buttons
             btn_frame = ttk.Frame(frame)
-            btn_frame.pack(fill="x", pady=(8, 8))
+            btn_frame.pack(pady=(8, 8))
 
             sim_label = ttk.Label(btn_frame, text="No file", foreground="grey", font=("", 8))
+
             graph_btn = ttk.Button(
-                btn_frame, text="Plot Wind-Altitude Chart", state="disabled",
+                btn_frame, text="Plot Wind-Altitude Chart",
                 command=lambda idx=i, fp=file_path: self._run_outlier_graph(idx, fp)
             )
 
@@ -414,12 +416,11 @@ class FilePlotApp:
                 if path:
                     self._sim_param_files[idx] = path
                     sim_name = os.path.basename(path)
-                    lbl.config(text=sim_name if len(sim_name) <= 22 else sim_name[:19] + "...", foreground="black")
-                    gb.config(state="normal")
+                    lbl.config(text=sim_name if len(sim_name) <= 22 else sim_name[:19] + "...", foreground="white")
+                    gb.grid(row=1, column=0, columnspan=2, pady=(8, 0))
 
-            ttk.Button(btn_frame, text="Upload Sim Params", command=_upload_sim).pack(side="left", padx=(0, 8))
-            sim_label.pack(side="left", padx=(0, 16))
-            graph_btn.pack(side="left")
+            ttk.Button(btn_frame, text="Upload Sim Params", command=_upload_sim).grid(row=0, column=0, padx=(0, 8))
+            sim_label.grid(row=0, column=1)
 
             if file_path != self.active_paths[-1]:
                 ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=6)

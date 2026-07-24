@@ -169,13 +169,15 @@ def all_names(list_of_files):
 
 class RocketStats:
     def __init__(self, total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
-                 max_landing_distance, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
+                 max_landing_distance, avg_lat, avg_lon, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
         self.total_simulations = total_sims
         self.mean_apogee = mean_apogee
         self.std_apogee = std_apogee
         self.mean_landing_distance = mean_landing_distance
         self.std_landing_distance = std_landing_distance
         self.max_landing_distance = max_landing_distance
+        self.avg_lat = avg_lat
+        self.avg_lon = avg_lon
         self.accuracy_launches = accuracy_launches
         self.mean_min_stability = mean_min_stability
         self.mean_lateral_velocity = mean_lateral_velocity
@@ -209,6 +211,9 @@ def coordinate_stats(historical_file_path):
     std_landing_distance = round(landing_distances.std(), 3)
     max_landing_distance = round(landing_distances.max(), 3)
 
+    avg_lat = round(lat_series.mean(), 6)
+    avg_lon = round(lon_series.mean(), 6)
+
     successes = (landing_distances <= 10).sum()
     accuracy_launches = successes / total_sims if total_sims > 0 else 0
 
@@ -231,11 +236,14 @@ def coordinate_stats(historical_file_path):
         mean_landing_distance,
         std_landing_distance,
         max_landing_distance,
+        avg_lat,
+        avg_lon,
         accuracy_launches,
         mean_min_stability,
         mean_lateral_velocity,
         mean_wind_speed
     )
+
 
 def compute_circular_mean(degrees):
     """Computes the true average of angular data using vector math."""
