@@ -25,8 +25,13 @@ def get_colors(file_paths):
     :param file_paths:  array of .csv file_paths
     :return:            array of evenly spaced colors; array of defined colors for plotting sigma ellipses
     """
-    colors = cm.viridis(np.linspace(0, 1, len(file_paths) + 1))
-    sigma_colors = ["xkcd:red wine", "xkcd:cherry red", "xkcd:orangish"]
+    n_files = len(file_paths)
+    if n_files == 1:
+        colors = [cm.viridis(0.65)]
+    else:
+        colors = cm.viridis(np.linspace(0.25, 1.0, n_files))
+
+    sigma_colors = ["xkcd:red wine", "xkcd:sunflower", "xkcd:cherry red"]
     return colors, sigma_colors
 
 
@@ -322,7 +327,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
             crs="EPSG:4326",
             source=str(LC_GEOGRAPHY_DIR / "lc_basemap.tif"),
             zorder=0,
-            alpha=0.9,
+            alpha=0.85,
             attribution=False
         )
     except Exception:

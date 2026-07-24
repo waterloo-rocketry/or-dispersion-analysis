@@ -1,32 +1,56 @@
 import os
-import tkinter as tk
-import matplotlib.pyplot as plt
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QPushButton, QLabel, QLineEdit, QCheckBox, QGroupBox, QScrollArea,
+    QFrame, QFileDialog, QMessageBox, QDialog
+)
 
 from matplotlib.figure import Figure
 from matplotlib.colors import to_hex
-from tkinter import ttk, filedialog, messagebox
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 
 from data_engine import all_names, coordinate_stats, analyze_outlier_winds
 from plotting import (get_colors, make_safe_filename, plot_data, save_plot, set_default_style,
                       plot_outlier_analysis, TOP_OUTLIERS_COUNT)
 
-class FilePlotApp:
-    def __init__(self, root, initial_dir=None):
+
+class OutlierWindow(QDialog):
+    """
+    Non-modal window for the per-file outlier wind analysis plot. Clears its
+    matplotlib Figure on close (mirrors the original Tkinter
+    WM_DELETE_WINDOW -> fig.clear() handler) so unused figures don't linger.
+    """
+    def __init__(self, parent, fig):
+        super().__init__(parent)
+        self._fig = fig
+
+    def closeEvent(self, event):
+        self._fig.clear()
+        super().closeEvent(event)
+
+
+class FilePlotApp(QMainWindow):
+    def __init__(self, initial_dir=None):
         """
         Initialize class.
-        :param root:        tkinter root
         :param initial_dir: user-specified initial directory, optional - returns root directory
         """
-        self.root = root
-        self.root.title("Waterloo Rocketry Dispersion Zone Analysis")
+        super().__init__()
+        self.setWindowTitle("Waterloo Rocketry Dispersion Zone Analysis")
         self.initial_dir = initial_dir or "."
         self.file_paths = []
         self.launch_names = []
-        self.file_vars = []
+        self.file_checks = []
+        self.active_paths = []
         self.outlier_date_summary = {}
+        self._sim_param_files = {}
+        self._stats_win = None
+        self._wind_windows = {}
         self._build_ui()
         self._setup_matplotlib()
+        self.resize(1200, 800)
 
     def _build_ui(self):
         """
@@ -49,214 +73,148 @@ class FilePlotApp:
                 |--> Status bar to inform user of errors or updates
         :return:
         """
-        # Main frame
-        main_frame = ttk.Frame(self.root, padding=8)
-        main_frame.grid(row=0, column=0, sticky="nsew")
-
-        # Create status_var early so init-time callbacks can use it
-        self.status_var = tk.StringVar(value="Ready")
-
-        # self.sim_param_files_selected = None
-
-        # Allow main window to expand
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.rowconfigure(0, weight=1)
-
-        # Inset main frame
-        middle_frame = ttk.Frame(main_frame)
-        middle_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 0))
-
-        # Let left (buttons/files) and right (plot) share space dynamically
-        middle_frame.columnconfigure(0, weight=0, minsize=120)
-        middle_frame.columnconfigure(1, weight=1)
-        middle_frame.rowconfigure(0, weight=0)
-        middle_frame.rowconfigure(1, weight=1)
-        middle_frame.rowconfigure(2, weight=0)
+        central = QWidget()
+        self.setCentralWidget(central)
+        grid = QGridLayout(central)
+        grid.setContentsMargins(8, 8, 8, 8)
 
         # Left column stacked buttons
-        button_stack = ttk.Frame(middle_frame)
-        button_stack.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 6))
-        button_stack.columnconfigure(0, weight=1)
-        button_stack.rowconfigure((0, 1, 2, 3), weight=0)
+        button_stack = QWidget()
+        button_layout = QVBoxLayout(button_stack)
+        button_layout.setContentsMargins(0, 0, 8, 6)
 
-        self.select_btn = ttk.Button(button_stack, text="Select Files", command=self.select_files)
-        self.select_btn.grid(row=0, column=0, padx=4, pady=(0, 4), sticky="ew")
+        self.select_btn = QPushButton("Select Files")
+        self.plot_btn = QPushButton("Plot")
+        self.clear_btn = QPushButton("Clear")
+        self.save_file_btn = QPushButton("Save Plot")
+        for btn in (self.select_btn, self.plot_btn, self.clear_btn, self.save_file_btn):
+            button_layout.addWidget(btn)
 
-        self.plot_btn = ttk.Button(button_stack, text="Plot", command=self.plot_selected)
-        self.plot_btn.grid(row=1, column=0, padx=4, pady=(0, 4), sticky="ew")
+        grid.addWidget(button_stack, 0, 0)
 
-        self.clear_btn = ttk.Button(button_stack, text="Clear", command=self.clear_all)
-        self.clear_btn.grid(row=2, column=0, padx=4, pady=(0, 4), sticky="ew")
+        # Left column file list (scrollable, checkbox per file)
+        list_group = QGroupBox("Selected files")
+        list_group.setMinimumWidth(220)
+        list_group_layout = QVBoxLayout(list_group)
 
-        self.save_file_btn = ttk.Button(button_stack, text="Save Plot", command=self.save_file)
-        self.save_file_btn.grid(row=3, column=0, padx=4, pady=(0, 4), sticky="ew")
+        self.file_scroll = QScrollArea()
+        self.file_scroll.setWidgetResizable(True)
+        self.file_list_widget = QWidget()
+        self.file_list_layout = QVBoxLayout(self.file_list_widget)
+        self.file_list_layout.addStretch()  # keeps checkboxes anchored to the top
+        self.file_scroll.setWidget(self.file_list_widget)
+        list_group_layout.addWidget(self.file_scroll)
 
-        # Left column file list
-        list_frame = ttk.LabelFrame(middle_frame, text="Selected files", padding=6)
-        list_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
-        list_frame.rowconfigure(0, weight=1)
-        list_frame.columnconfigure(0, weight=1)
-
-        # A canvas lets the inner frame scroll
-        self.file_canvas = tk.Canvas(list_frame, width=220)
-        self.file_canvas.grid(row=0, column=0, sticky="nsew")
-
-        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.file_canvas.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        # self.file_canvas.config(yscrollcommand=scrollbar.set)
-
-        h_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=self.file_canvas.xview)
-        h_scrollbar.grid(row=1, column=0, sticky="ew")
-
-        self.file_canvas.config(yscrollcommand=scrollbar.set, xscrollcommand=h_scrollbar.set)
-
-        # This inner frame is what actually holds the checkboxes
-        self.file_check_frame = ttk.Frame(self.file_canvas)
-
-        # Save the window ID to a variable
-        self.canvas_window = self.file_canvas.create_window((0, 0), window=self.file_check_frame, anchor="nw")
-
-        # This line makes the scroll region update whenever checkboxes are added
-        self.file_check_frame.bind("<Configure>", lambda e: self.file_canvas.configure(
-            scrollregion=self.file_canvas.bbox("all")))
-
-        # Force the inner frame to be at least as wide as the canvas
-        self.file_canvas.bind("<Configure>", lambda e: self.file_canvas.itemconfig(self.canvas_window, width=e.width))
+        grid.addWidget(list_group, 1, 0)
 
         # Set plot title
-        set_title = ttk.Frame(middle_frame)
-        set_title.grid(row=2, column=0, sticky="nsew", padx=(0, 8), pady=(6, 6))
-        set_title.columnconfigure(0, weight=1)
-        set_title.rowconfigure((0, 1), weight=0)
+        title_widget = QWidget()
+        title_layout = QVBoxLayout(title_widget)
+        title_layout.setContentsMargins(0, 6, 8, 6)
+        self.title_entry = QLineEdit("Blah blah, plot title, etc. etc.")
+        title_layout.addWidget(QLabel("Set Plot Title:"))
+        title_layout.addWidget(self.title_entry)
 
-        self.plot_title = tk.StringVar(value="Blah blah, plot title, etc. etc.")
-        self.title_label = ttk.Label(set_title, text="Set Plot Title:")
-        self.title_entry = ttk.Entry(set_title, textvariable=self.plot_title, width=40)
-
-        self.title_label.grid(row=0, column=0, sticky="w", padx=8, pady=(6, 0))
-        self.title_entry.grid(row=1, column=0, sticky="w", padx=8, pady=(2, 0))
+        grid.addWidget(title_widget, 2, 0)
 
         # Configurable inputs for plots
-        checkbox_stack = ttk.Frame(middle_frame)
-        checkbox_stack.grid(row=3, column=0, sticky="nsew", padx=(0, 8), pady=(0, 6))
-        checkbox_stack.columnconfigure(0, weight=1)
-        checkbox_stack.rowconfigure((0, 1, 2, 3), weight=0)
+        checkbox_stack = QWidget()
+        checkbox_layout = QVBoxLayout(checkbox_stack)
+        checkbox_layout.setContentsMargins(0, 0, 8, 6)
 
-        self.plot_LC_ellipse = tk.BooleanVar(value=True)
-        self.plot_sigma_ellipses = tk.BooleanVar(value=False)
-        self.plot_confidence_ellipse = tk.BooleanVar(value=False)
-        self.plot_top_outliers = tk.BooleanVar(value=True)
+        self.LC_ellipse_box = QCheckBox("Plot LC Ellipse")
+        self.LC_ellipse_box.setChecked(True)
+        self.sigma_ellipse_box = QCheckBox("Plot Sigma Ellipses")
+        self.confidence_ellipse_box = QCheckBox("Plot Confidence Ellipse")
+        self.top_outliers_box = QCheckBox(f"Highlight Top {TOP_OUTLIERS_COUNT} Outliers")
+        self.top_outliers_box.setChecked(True)
 
-        self.LC_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot LC Ellipse", variable=self.plot_LC_ellipse)
-        self.sigma_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Sigma Ellipses",
-                                                 variable=self.plot_sigma_ellipses)
-        self.confidence_ellipse_box = ttk.Checkbutton(checkbox_stack, text="Plot Confidence Ellipse",
-                                                      variable=self.plot_confidence_ellipse)
-        self.top_outliers_box = ttk.Checkbutton(
-            checkbox_stack, text=f"Highlight Top {TOP_OUTLIERS_COUNT} Outliers",
-            variable=self.plot_top_outliers)
+        for box in (self.LC_ellipse_box, self.sigma_ellipse_box,
+                    self.confidence_ellipse_box, self.top_outliers_box):
+            checkbox_layout.addWidget(box)
 
-        self.LC_ellipse_box.grid(row=0, column=0, sticky="w", padx=4, pady=(12, 2))
-        self.sigma_ellipse_box.grid(row=1, column=0, sticky="w", padx=4, pady=2)
-        self.confidence_ellipse_box.grid(row=2, column=0, sticky="w", padx=4, pady=(2, 0))
-        self.top_outliers_box.grid(row=3, column=0, sticky="w", padx=4, pady=(2, 0))
+        self.confidence_container = QWidget()
+        conf_layout = QHBoxLayout(self.confidence_container)
+        conf_layout.setContentsMargins(8, 6, 0, 0)
+        self.confidence_entry = QLineEdit("0.95")
+        self.confidence_entry.setFixedWidth(60)
+        conf_layout.addWidget(QLabel("Confidence level (e.g. 0.95):"))
+        conf_layout.addWidget(self.confidence_entry)
+        conf_layout.addStretch()
+        self.confidence_container.setVisible(False)
+        checkbox_layout.addWidget(self.confidence_container)
 
-        self.confidence_level = tk.StringVar(value="0.95")
-        self.confidence_label = ttk.Label(checkbox_stack, text="Confidence level (e.g. 0.95):")
-        self.confidence_entry = ttk.Entry(checkbox_stack, textvariable=self.confidence_level, width=10)
-
-        self.confidence_label.grid(row=4, column=0, sticky="w", padx=8, pady=(6, 0))
-        self.confidence_entry.grid(row=4, column=0, sticky="e", padx=8, pady=(6, 0))
-        self.confidence_label.grid_remove()
-        self.confidence_entry.grid_remove()
-
-        self._register_input_traces()
+        grid.addWidget(checkbox_stack, 3, 0)
 
         # Right column plot area
-        plot_frame = ttk.LabelFrame(middle_frame, text="Plot", padding=6)
-        plot_frame.grid(row=0, column=1, rowspan=4, sticky="nsew")
-        plot_frame.rowconfigure(0, weight=1)
-        plot_frame.columnconfigure(0, weight=1)
-        self.plot_container = plot_frame
+        plot_group = QGroupBox("Plot")
+        self.plot_layout = QVBoxLayout(plot_group)
+        grid.addWidget(plot_group, 0, 1, 4, 1)
 
-        # Bottom status bar (using already-created self.status_var)
-        status = ttk.Label(main_frame, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w")
-        status.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(1, 1)
 
-        self.root.update_idletasks()
-        self.root.minsize(700, 400)
+        # Bottom status bar
+        self.statusBar().showMessage("Ready")
 
+        self._register_input_connections()
+        self.setMinimumSize(700, 400)
 
     def _setup_matplotlib(self):
         """
-        Creates matplotlib Figure + Axes and embeds into Tkinter.
+        Creates matplotlib Figure + Axes and embeds into the Qt plot panel.
         """
         set_default_style()
 
-        self.fig = Figure(figsize=(10, 8), dpi=50)
+        self.fig = Figure(figsize=(10, 8), dpi=100)
         self.ax = self.fig.add_subplot(111)
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_container)
-        self.canvas_widget = self.canvas.get_tk_widget()
-        self.canvas_widget.grid(row=0, column=0, sticky="nsew")
+        self.canvas = FigureCanvasQTAgg(self.fig)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
 
-        toolbar_frame = ttk.Frame(self.plot_container)
-        toolbar_frame.grid(row=1, column=0, sticky="ew")
-        nav = NavigationToolbar2Tk(self.canvas, toolbar_frame)
-        nav.update()
+        self.plot_layout.addWidget(self.canvas)
+        self.plot_layout.addWidget(self.toolbar)
 
-
-    def _on_plot_option_changed(self):
+    def _on_plot_option_changed(self, *_args):
         """
-        Updates status bar message when one of the user plot option checkboxes is updated.
+        Updates status bar message when one of the user plot option widgets is updated.
         :return:
         """
-        self.status_var.set("Plot options changed — press 'Plot' to apply")
+        self.statusBar().showMessage("Plot options changed — press 'Plot' to apply")
 
-
-    def _toggle_confidence_entry(self):
+    def _toggle_confidence_entry(self, checked):
         """
-        Shows and hides confidence level user input textbox depending on if self.plot_confidence_ellipse is selected.
+        Shows and hides confidence level user input box depending on if
+        self.confidence_ellipse_box is checked.
         :return:
         """
-        if self.plot_confidence_ellipse.get():
-            self.confidence_label.grid()
-            self.confidence_entry.grid()
-        else:
-            self.confidence_label.grid_remove()
-            self.confidence_entry.grid_remove()
+        self.confidence_container.setVisible(checked)
         self._on_plot_option_changed()
 
-
-    def _register_input_traces(self):
+    def _register_input_connections(self):
         """
-        Adds a trace to provided variables to track changes from user.
+        Wires widget signals to their change handlers.
         :return:
         """
-        for var in (self.plot_LC_ellipse, self.plot_sigma_ellipses, self.plot_confidence_ellipse, self.plot_top_outliers, self.plot_title):
-            try:
-                var.trace_add('write', lambda *a, v=var: self._on_plot_option_changed())
-            except AttributeError:
-                var.trace('w', lambda *a, v=var: self._on_plot_option_changed())
+        for box in (self.LC_ellipse_box, self.sigma_ellipse_box, self.top_outliers_box):
+            box.toggled.connect(self._on_plot_option_changed)
+        self.confidence_ellipse_box.toggled.connect(self._toggle_confidence_entry)
+        self.title_entry.textChanged.connect(self._on_plot_option_changed)
 
-        try:
-            self.plot_confidence_ellipse.trace_add('write', lambda *a: self._toggle_confidence_entry())
-        except AttributeError:
-            self.plot_confidence_ellipse.trace('w', lambda *a: self._toggle_confidence_entry())
-
-        self._toggle_confidence_entry()
-
+        self.select_btn.clicked.connect(self.select_files)
+        self.plot_btn.clicked.connect(self.plot_selected)
+        self.clear_btn.clicked.connect(self.clear_all)
+        self.save_file_btn.clicked.connect(self.save_file)
 
     def select_files(self):
         """
-        Function enabling user-selected files using filedialog.
+        Function enabling user-selected files using QFileDialog.
         :return:
         """
-        files = filedialog.askopenfilenames(
-            parent=self.root, title="Select files to plot", initialdir=self.initial_dir,
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select files to plot", self.initial_dir,
+            "CSV files (*.csv);;All files (*.*)"
         )
         if not files:
             return
@@ -264,29 +222,28 @@ class FilePlotApp:
         self.launch_names = list(all_names(self.file_paths))
         self._refresh_file_listbox()
 
-
     def _refresh_file_listbox(self):
         """
         Adds selected .csv filenames to the file display window so the user can see what files have been selected.
         :return:
         """
-        # Wipe all existing checkboxes from the frame
-        for widget in self.file_check_frame.winfo_children():
-            widget.destroy()
-        self.file_vars = []
+        # Wipe all existing checkboxes (keep the trailing stretch item)
+        while self.file_list_layout.count() > 1:
+            item = self.file_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.file_checks = []
 
         # Create one checkbox per file
         for file_path in self.file_paths:
-            var = tk.BooleanVar(value=True)
-
             file_name = os.path.basename(file_path)
             display_name = file_name if len(file_name) <= 38 else file_name[:35] + "..."
 
-            cb = ttk.Checkbutton(self.file_check_frame, text=display_name, variable=var)
-            cb.pack(anchor="w", fill="x", expand=True, padx=4, pady=2)
-
-            self.file_vars.append(var)
-
+            cb = QCheckBox(display_name)
+            cb.setChecked(True)
+            self.file_list_layout.insertWidget(self.file_list_layout.count() - 1, cb)
+            self.file_checks.append(cb)
 
     def _get_validated_confidence(self, confidence_flag):
         """
@@ -300,7 +257,7 @@ class FilePlotApp:
         if not confidence_flag:
             return 0.95
 
-        value = (self.confidence_level.get() or "").strip()
+        value = self.confidence_entry.text().strip()
         if not value:
             return 0.95
 
@@ -310,57 +267,61 @@ class FilePlotApp:
                 raise ValueError("Confidence level must be between 0 and 1 (exclusive).")
             return confidence_level
         except Exception as e:
-            messagebox.showerror(
-                title="Invalid confidence level",
-                message=f"Please enter a valid confidence value between 0 and 1 (e.g. 0.95).\n\nError: {e}")
-            self.status_var.set("Invalid confidence value")
+            QMessageBox.critical(
+                self, "Invalid confidence level",
+                f"Please enter a valid confidence value between 0 and 1 (e.g. 0.95).\n\nError: {e}"
+            )
+            self.statusBar().showMessage("Invalid confidence value")
             return None
-
 
     def plot_selected(self):
         """
-        Function is called when 'Plot data' button is clicked; calls plot_data() to post-process data and display on
+        Function is called when 'Plot' button is clicked; calls plot_data() to post-process data and display on
         the graph.
         :return:
         """
-        self.active_paths = [p for p, v in zip(self.file_paths, self.file_vars) if v.get()]
+        self.active_paths = [p for p, cb in zip(self.file_paths, self.file_checks) if cb.isChecked()]
         if not self.active_paths:
-            messagebox.showwarning("No files checked", "Please check at least one file to plot.")
+            QMessageBox.warning(self, "No files checked", "Please check at least one file to plot.")
             return
 
-        LC_flag = self.plot_LC_ellipse.get()
-        sigma_flag = self.plot_sigma_ellipses.get()
-        confidence_flag = self.plot_confidence_ellipse.get()
+        LC_flag = self.LC_ellipse_box.isChecked()
+        sigma_flag = self.sigma_ellipse_box.isChecked()
+        confidence_flag = self.confidence_ellipse_box.isChecked()
         confidence_level = self._get_validated_confidence(confidence_flag)
         if confidence_level is None:
             return
 
         self.outlier_date_summary = plot_data(
             file_paths=self.active_paths,
-            plot_title=self.plot_title.get(),
+            plot_title=self.title_entry.text(),
             fig=self.fig,
             ax=self.ax,
             plot_LC_ellipse=LC_flag,
             plot_sigma_ellipses=sigma_flag,
             plot_confidence_ellipse=confidence_flag,
             confidence=confidence_level,
-            plot_top_outliers=self.plot_top_outliers.get()
+            plot_top_outliers=self.top_outliers_box.isChecked()
         ) or {}
-        self.fig.tight_layout()
+        # self.fig.tight_layout()
         self.canvas.draw()
         self._show_stats_window()
 
-
     def _show_stats_window(self):
-        if hasattr(self, '_stats_win') and self._stats_win.winfo_exists():
-            self._stats_win.destroy()
+        if self._stats_win is not None:
+            self._stats_win.close()
 
-        self._stats_win = tk.Toplevel(self.root)
-        self._stats_win.title("General Flight Statistics")
-        self._stats_win.resizable(False, False)
+        self._stats_win = QDialog(self)
+        self._stats_win.setWindowTitle("General Flight Statistics")
+        self._stats_win.resize(420, 640)
 
-        frame = ttk.Frame(self._stats_win, padding=12)
-        frame.pack(fill="both", expand=True)
+        outer_layout = QVBoxLayout(self._stats_win)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        scroll.setWidget(inner)
+        outer_layout.addWidget(scroll)
 
         raw_colours, _ = get_colors(self.active_paths)
         colours = [to_hex(c) for c in raw_colours]
@@ -373,15 +334,23 @@ class FilePlotApp:
             self._sim_param_files[i] = None
 
             # Header
-            header_frame = ttk.Frame(frame)
-            header_frame.pack(fill="x", pady=(10, 4))
-            tk.Label(header_frame, background=colours[i], width=2, height=1).pack(side="left", padx=(0, 6))
-            ttk.Label(header_frame, text=display_header, font=("", 11, "bold italic")).pack(side="left")
+            header_layout = QHBoxLayout()
+            swatch = QLabel()
+            swatch.setFixedSize(18, 18)
+            swatch.setStyleSheet(f"background-color: {colours[i]}; border: 1px solid black;")
+            header_label = QLabel(display_header)
+            font = header_label.font()
+            font.setBold(True)
+            font.setItalic(True)
+            font.setPointSize(11)
+            header_label.setFont(font)
+            header_layout.addWidget(swatch)
+            header_layout.addWidget(header_label)
+            header_layout.addStretch()
+            inner_layout.addLayout(header_layout)
 
-            # Stats Grid Layout
-            grid_frame = ttk.Frame(frame)
-            grid_frame.pack(fill="x", padx=16)
-
+            # Stats grid layout
+            stats_grid = QGridLayout()
             rows = [
                 ("Total Simulations", f"{stats.total_simulations}"),
                 ("Mean Apogee", f"{stats.mean_apogee:,} ft"),
@@ -395,161 +364,177 @@ class FilePlotApp:
                 ("Mean Lateral Velocity", f"{stats.mean_lateral_velocity:.2f} m/s"),
                 ("Mean Wind Speed", f"{stats.mean_wind_speed:.2f} mph"),
             ]
-
             for row_idx, (label, value) in enumerate(rows):
-                ttk.Label(grid_frame, text=label).grid(row=row_idx, column=0, sticky="w", pady=2)
-                ttk.Label(grid_frame, text=value, font=("", 11, "bold")).grid(row=row_idx, column=1, sticky="e", pady=2, padx=(20, 0))
+                stats_grid.addWidget(QLabel(label), row_idx, 0)
+                value_label = QLabel(value)
+                vfont = value_label.font()
+                vfont.setBold(True)
+                vfont.setPointSize(11)
+                value_label.setFont(vfont)
+                stats_grid.addWidget(value_label, row_idx, 1, Qt.AlignmentFlag.AlignRight)
+            inner_layout.addLayout(stats_grid)
 
             # Buttons
-            btn_frame = ttk.Frame(frame)
-            btn_frame.pack(pady=(8, 8))
+            btn_layout = QHBoxLayout()
+            sim_label = QLabel("No file")
+            sim_label.setStyleSheet("color: grey; font-size: 8pt;")
 
-            sim_label = ttk.Label(btn_frame, text="No file", foreground="grey", font=("", 8))
-
-            graph_btn = ttk.Button(
-                btn_frame, text="Plot Wind-Altitude Chart",
-                command=lambda idx=i, fp=file_path: self._run_outlier_graph(idx, fp)
+            graph_btn = QPushButton("Plot Wind-Altitude Chart")
+            graph_btn.setVisible(False)
+            graph_btn.clicked.connect(
+                lambda _checked=False, idx=i, fp=file_path: self._run_outlier_graph(idx, fp)
             )
 
-            def _upload_sim(idx=i, lbl=sim_label, gb=graph_btn):
-                path = filedialog.askopenfilename(parent=self._stats_win, title="Select Sim Parameters CSV")
+            def _upload_sim(_checked=False, idx=i, lbl=sim_label, gb=graph_btn):
+                path, _ = QFileDialog.getOpenFileName(self._stats_win, "Select Sim Parameters CSV")
                 if path:
                     self._sim_param_files[idx] = path
                     sim_name = os.path.basename(path)
-                    lbl.config(text=sim_name if len(sim_name) <= 22 else sim_name[:19] + "...", foreground="white")
-                    gb.grid(row=1, column=0, columnspan=2, pady=(8, 0))
+                    lbl.setText(sim_name if len(sim_name) <= 22 else sim_name[:19] + "...")
+                    lbl.setStyleSheet("color: white; font-size: 8pt;")
+                    gb.setVisible(True)
 
-            ttk.Button(btn_frame, text="Upload Sim Params", command=_upload_sim).grid(row=0, column=0, padx=(0, 8))
-            sim_label.grid(row=0, column=1)
+            upload_btn = QPushButton("Upload Sim Params")
+            upload_btn.clicked.connect(_upload_sim)
+
+            btn_layout.addWidget(upload_btn)
+            btn_layout.addWidget(sim_label)
+            btn_layout.addStretch()
+            inner_layout.addLayout(btn_layout)
+            inner_layout.addWidget(graph_btn)
 
             if file_path != self.active_paths[-1]:
-                ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=6)
+                separator = QFrame()
+                separator.setFrameShape(QFrame.Shape.HLine)
+                separator.setFrameShadow(QFrame.Shadow.Sunken)
+                inner_layout.addWidget(separator)
 
+        inner_layout.addStretch()
+        self._stats_win.show()
 
     def _run_outlier_graph(self, i, hist_path):
         """Builds a divided window with overlay plotting and statistical analysis."""
         sim_path = self._sim_param_files[i]
-        win_attr = f'_wind_win_{i}'
 
-        if hasattr(self, win_attr) and getattr(self, win_attr).winfo_exists():
-            getattr(self, win_attr).destroy()
+        if i in self._wind_windows and self._wind_windows[i].isVisible():
+            self._wind_windows[i].close()
 
-        win = tk.Toplevel(self.root)
-        win.title(f"Outlier Wind Analysis — {os.path.basename(hist_path)}")
-        win.geometry("1050x650")
-        setattr(self, win_attr, win)
+        fig = Figure(figsize=(8, 6))
+        win = OutlierWindow(self, fig)
+        win.setWindowTitle(f"Outlier Wind Analysis — {os.path.basename(hist_path)}")
+        win.resize(1050, 650)
+        self._wind_windows[i] = win
 
         # Structure window: Left (Plot 75%), Right (Sidebar 25%)
-        main_frame = ttk.Frame(win, padding=12)
-        main_frame.pack(fill="both", expand=True)
-        main_frame.columnconfigure(0, weight=3)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(0, weight=1)
+        main_layout = QHBoxLayout(win)
 
-        plot_frame = ttk.Frame(main_frame)
-        plot_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        plot_widget = QWidget()
+        plot_layout = QVBoxLayout(plot_widget)
 
-        stats_frame = ttk.LabelFrame(main_frame, text="Outlier Analytics", padding=14)
-        stats_frame.grid(row=0, column=1, sticky="nsew")
+        stats_group = QGroupBox("Outlier Analytics")
+        stats_layout = QVBoxLayout(stats_group)
+
+        main_layout.addWidget(plot_widget, 3)
+        main_layout.addWidget(stats_group, 1)
 
         outliers, summary = analyze_outlier_winds(hist_path, sim_path)
 
-        # Wind-based Outlier Stats (its own sub-frame so its grid layout
-        # doesn't conflict with the pack-based layout used for the section below)
-        wind_stats_frame = ttk.Frame(stats_frame)
-        wind_stats_frame.pack(fill="x")
-
+        # Wind-based Outlier Stats
         if summary.get("total_outliers", 0) > 0:
             stats_data = [
                 ("Total Outliers Detected", f"{summary['total_outliers']} flights"),
                 ("Worst Shear Altitude", f"{summary['overall_max_speed_alt']:,} m"),
                 ("Peak Avg Layer Speed", f"{summary['overall_max_speed']:.1f} kn"),
             ]
-
-            for row_idx, (label, val) in enumerate(stats_data):
-                ttk.Label(wind_stats_frame, text=label, foreground="grey").grid(row=row_idx * 2, column=0, sticky="w", pady=(12, 0))
-                ttk.Label(wind_stats_frame, text=val, font=("", 14, "bold")).grid(row=row_idx * 2 + 1, column=0, sticky="w", pady=(0, 4))
-
+            for label, val in stats_data:
+                label_widget = QLabel(label)
+                label_widget.setStyleSheet("color: grey;")
+                stats_layout.addWidget(label_widget)
+                value_widget = QLabel(val)
+                vfont = value_widget.font()
+                vfont.setBold(True)
+                vfont.setPointSize(14)
+                value_widget.setFont(vfont)
+                stats_layout.addWidget(value_widget)
         else:
-            ttk.Label(wind_stats_frame, text="No outliers >10 NM found.", font=("", 10, "italic")).pack(pady=20)
+            info_label = QLabel("No outliers >10 NM found.")
+            info_label.setStyleSheet("font-style: italic;")
+            stats_layout.addWidget(info_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
-        # Top-Outlier Landing Dates (from the main dispersion plot's
-        # outlier highlighting) - shown here instead of printed to the console
+        # Top-Outlier Landing Dates (from the main dispersion plot's outlier highlighting)
         outlier_dates = self.outlier_date_summary.get(hist_path, {})
         if outlier_dates:
-            ttk.Separator(stats_frame, orient="horizontal").pack(fill="x", pady=(16, 8))
-            dates_frame = ttk.Frame(stats_frame)
-            dates_frame.pack(fill="x")
+            separator = QFrame()
+            separator.setFrameShape(QFrame.Shape.HLine)
+            stats_layout.addWidget(separator)
 
-            ttk.Label(dates_frame, text=f"Top {TOP_OUTLIERS_COUNT} Outlier Landing Dates",
-                     foreground="grey").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+            title_label = QLabel(f"Top {TOP_OUTLIERS_COUNT} Outlier Landing Dates")
+            title_label.setStyleSheet("color: grey;")
+            stats_layout.addWidget(title_label)
 
-            for row_idx, (date, count) in enumerate(sorted(outlier_dates.items()), start=1):
-                ttk.Label(dates_frame, text=date).grid(row=row_idx, column=0, sticky="w", pady=1)
-                ttk.Label(dates_frame, text=f"{count}", font=("", 10, "bold")).grid(
-                    row=row_idx, column=1, sticky="e", padx=(20, 0), pady=1)
+            dates_grid = QGridLayout()
+            for row_idx, (date, count) in enumerate(sorted(outlier_dates.items())):
+                dates_grid.addWidget(QLabel(date), row_idx, 0)
+                count_label = QLabel(str(count))
+                cfont = count_label.font()
+                cfont.setBold(True)
+                count_label.setFont(cfont)
+                dates_grid.addWidget(count_label, row_idx, 1, Qt.AlignmentFlag.AlignRight)
+            stats_layout.addLayout(dates_grid)
+
+        stats_layout.addStretch()
 
         # Render Plot
-        fig = Figure(figsize=(8, 6))
         ax = fig.add_subplot(111)
-
         plot_outlier_analysis(ax, outliers, summary)
 
-        canvas = FigureCanvasTkAgg(fig, master=plot_frame)
-        canvas.get_tk_widget().pack(fill="both", expand=True)
-        canvas.draw()
+        canvas = FigureCanvasQTAgg(fig)
+        toolbar = NavigationToolbar2QT(canvas, win)
+        plot_layout.addWidget(canvas)
+        plot_layout.addWidget(toolbar)
 
-        toolbar_frame = ttk.Frame(plot_frame)
-        toolbar_frame.pack(fill="x", side="bottom")
-        NavigationToolbar2Tk(canvas, toolbar_frame).update()
-
-        def on_close():
-            fig.clear()
-            win.destroy()
-
-        win.protocol("WM_DELETE_WINDOW", on_close)
-
+        win.show()
 
     def save_file(self):
         """
-        Function is called when 'Save plot' button is clicked; calls save_plot() to save the figure.
+        Function is called when 'Save Plot' button is clicked; calls save_plot() to save the figure.
         :return:
         """
         if not self.file_paths:
-            messagebox.showwarning("No files", "Please select files before plotting.")
+            QMessageBox.warning(self, "No files", "Please select files before plotting.")
             return
 
         try:
-            LC_flag = self.plot_LC_ellipse.get()
-            sigma_flag = self.plot_sigma_ellipses.get()
-            confidence_flag = self.plot_confidence_ellipse.get()
+            LC_flag = self.LC_ellipse_box.isChecked()
+            sigma_flag = self.sigma_ellipse_box.isChecked()
+            confidence_flag = self.confidence_ellipse_box.isChecked()
 
             confidence_level = self._get_validated_confidence(confidence_flag)
             if confidence_level is None:
                 return
 
-            plot_title = self.plot_title.get()
+            plot_title = self.title_entry.text()
             default_name = make_safe_filename(plot_title).name
 
-            save_path = filedialog.asksaveasfilename(
-                title="Save plot as...",
-                initialfile=default_name,
-                defaultextension=".png",
-                filetypes=[("PNG image", "*.png"), ("JPEG image", "*.jpg;*.jpeg"), ("All files", "*.*")]
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "Save plot as...", default_name,
+                "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;All files (*.*)"
             )
 
             # If user canceled the dialog, return
             if not save_path:
-                self.status_var.set("Save cancelled")
+                self.statusBar().showMessage("Save cancelled")
                 return
 
             # Confirm overwrite if file exists
             if os.path.exists(save_path):
-                if not messagebox.askyesno(
-                    title="Confirm overwrite",
-                    message=f"File already exists:\n{save_path}\n\nOverwrite?"
-                ):
-                    self.status_var.set("Save cancelled")
+                reply = QMessageBox.question(
+                    self, "Confirm overwrite",
+                    f"File already exists:\n{save_path}\n\nOverwrite?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.statusBar().showMessage("Save cancelled")
                     return
 
             save_plot(
@@ -560,17 +545,16 @@ class FilePlotApp:
                 plot_sigma_ellipses=sigma_flag,
                 plot_confidence_ellipse=confidence_flag,
                 confidence=confidence_level,
-                plot_top_outliers=self.plot_top_outliers.get()
+                plot_top_outliers=self.top_outliers_box.isChecked()
             )
-            self.status_var.set(f"Plot saved: '{self.plot_title.get()}'")
+            self.statusBar().showMessage(f"Plot saved: '{plot_title}'")
 
         except Exception as error:
-            messagebox.showerror(
-                title="Plot error",
-                message=f"An error occurred while plotting:\n{error}"
+            QMessageBox.critical(
+                self, "Plot error",
+                f"An error occurred while plotting:\n{error}"
             )
-            self.status_var.set("Plot error")
-
+            self.statusBar().showMessage("Plot error")
 
     def clear_all(self):
         """
@@ -578,11 +562,13 @@ class FilePlotApp:
         :return:
         """
         self.file_paths = []
-        for widget in self.file_check_frame.winfo_children():
-            widget.destroy()
-        self.file_vars = []
+        while self.file_list_layout.count() > 1:
+            item = self.file_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.file_checks = []
         self.ax.clear()
-        self.ax.relim()
-        self.fig.tight_layout()
+        # self.fig.tight_layout()
         self.canvas.draw()
-        self.status_var.set("Cleared files and plot")
+        self.statusBar().showMessage("Cleared files and plot")

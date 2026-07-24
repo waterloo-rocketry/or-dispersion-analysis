@@ -1,16 +1,21 @@
-import tkinter as tk
+import sys
+
+from PySide6.QtWidgets import QApplication
+
 from app import FilePlotApp
 
 
 def main():
-    root = tk.Tk()
+    app = QApplication(sys.argv)
 
     # Root paths for testing environments
     initial_dir = "/Users/luca/PycharmProjects/Rocketry Dispersion Zone Analysis/Plugin Exports/"
 
-    app = FilePlotApp(root, initial_dir=initial_dir)
-    root.geometry("1200x800")
-    root.mainloop()
+    window = FilePlotApp(initial_dir=initial_dir)
+    window.resize(1200, 800)
+    window.show()
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
