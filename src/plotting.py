@@ -12,10 +12,17 @@ from pathlib import Path
 from scipy.stats import chi2
 
 # Imports from data_engine.py
-from data_engine import generate_labels, _extract_columns, ellipse_math, haversine_nm, ALTITUDES, _read_csv
+from data_engine import (
+    generate_labels, _extract_columns, ellipse_math, haversine_nm, ALTITUDES, _read_csv,
+    LAUNCH_LAT, LAUNCH_LON, LC_WAIVER_RADIUS_NM
+)
 
 TOP_OUTLIERS_COUNT  = 20
 LC_GEOGRAPHY_DIR    = Path("../LC Geography")
+
+# 1 nautical mile, in meters - used to convert LC_WAIVER_RADIUS_NM into the
+# geographic ellipse geometry below.
+METERS_PER_NM = 1852
 
 
 def get_colors(file_paths):
@@ -53,7 +60,7 @@ def set_default_style():
         "text.usetex": False,
         "mathtext.fontset": "cm",
         "font.family": "serif",
-        "font.size": 5,
+        "font.size": 8,
         "axes.labelsize": 9,
         "axes.titlesize": 10,
         "xtick.labelsize": 8,
@@ -123,7 +130,7 @@ def plot_known_locations(launch_lon, launch_lat, ax):
 
 
 def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse,
-                       confidence, plot_top_outliers=True):
+                       confidence, plot_top_outliers=True, data_by_path=None):
     """
     Core logic to populate a matplotlib Axes object with the dispersion data.
     Plots all files: rocket and payload scatter points plus optional ellipses onto ax.
@@ -135,19 +142,29 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     :param plot_confidence_ellipse: bool, user-option to plot ellipse enclosing n% of data points
     :param confidence:              float, user-option specifying perecentage of data points to enclose
     :param plot_top_outliers:       bool, user-option to plot/circle top outliers on the map
+    :param data_by_path:            optional dict mapping file_path -> already-loaded pandas DataFrame.
+                                    When provided, these DataFrames are reused instead of re-reading each
+                                    CSV from disk (the caller is expected to load/cache them once, e.g.
+                                    right before calling plot_data/save_plot). Falls back to reading from
+                                    disk itself when not provided, so this function still works standalone.
     :return:                        dict mapping each file_path to a {date: count} summary of its
                                     top-outlier landing dates (empty dict for files with no
                                     'Simulation' column, or where outlier highlighting was skipped)
     """
     scatter_labels = generate_labels(file_paths)
     colors, sigma_colors = get_colors(file_paths)
-    launch_lat, launch_lon = 47.965378, -81.873536
     outlier_date_summary = {}
 
     for i, (file_path, label, color) in enumerate(zip(file_paths, scatter_labels, colors)):
-        if not os.path.exists(file_path):
-            continue
-        data = _read_csv(file_path)
+        if data_by_path is not None:
+            data = data_by_path.get(file_path)
+            if data is None:
+                continue
+        else:
+            if not os.path.exists(file_path):
+                continue
+            data = _read_csv(file_path)
+
         rocket_lat, rocket_lon, payload_lat, payload_lon = _extract_columns(data)
 
         if rocket_lon is not None:
@@ -163,7 +180,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
             )
 
             if plot_top_outliers:
-                distances = haversine_nm(launch_lat, launch_lon, rocket_lat, rocket_lon)
+                distances = haversine_nm(LAUNCH_LAT, LAUNCH_LON, rocket_lat, rocket_lon)
                 uh_ohs = distances.nlargest(TOP_OUTLIERS_COUNT)
 
                 # Single vectorized scatter call instead of one ax.scatter() per point
@@ -257,14 +274,14 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
 
     if plot_LC_ellipse:
         plot_ellipse(
-            x=launch_lon,
-            y=launch_lat,
-            major=2 * (18520 / (111320 * np.cos(np.radians(launch_lat)))),
-            minor=2 * (18520 / 111320),
+            x=LAUNCH_LON,
+            y=LAUNCH_LAT,
+            major=2 * ((LC_WAIVER_RADIUS_NM * METERS_PER_NM) / (111320 * np.cos(np.radians(LAUNCH_LAT)))),
+            minor=2 * ((LC_WAIVER_RADIUS_NM * METERS_PER_NM) / 111320),
             tilt=0,
             edge_color="red",
             style="--",
-            name="10 NM Radius",
+            name=f"{LC_WAIVER_RADIUS_NM} NM Radius",
             ax=ax
         )
 
@@ -308,7 +325,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     )
 
     ax.set_aspect('equal', adjustable='datalim')
-    plot_known_locations(launch_lon, launch_lat, ax)
+    plot_known_locations(LAUNCH_LON, LAUNCH_LAT, ax)
 
     # `adjustable='datalim'` normally only gets applied lazily, at draw time -
     # matplotlib stretches xlim/ylim then to force a 1:1 aspect ratio. But
@@ -351,17 +368,17 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     return outlier_date_summary
 
 
-def plot_data(file_paths, plot_title, fig, ax, **kwargs):
+def plot_data(file_paths, plot_title, fig, ax, data_by_path=None, **kwargs):
     """Updates the Tkinter UI plot. Returns the outlier-date summary dict from draw_plot_elements."""
     ax.clear()
-    return draw_plot_elements(ax, file_paths, plot_title, **kwargs)
+    return draw_plot_elements(ax, file_paths, plot_title, data_by_path=data_by_path, **kwargs)
 
 
-def save_plot(file_paths, plot_title, output_path=None, **kwargs):
+def save_plot(file_paths, plot_title, output_path=None, data_by_path=None, **kwargs):
     """Saves a high-resolution plot bypassing Tkinter display quirks."""
     set_default_style()
     fig, axes = plt.subplots(figsize=(10, 8))
-    draw_plot_elements(axes, file_paths, plot_title, **kwargs)
+    draw_plot_elements(axes, file_paths, plot_title, data_by_path=data_by_path, **kwargs)
     fig.tight_layout()
     filename = Path(output_path) if output_path else make_safe_filename(plot_title)
     filename.parent.mkdir(parents=True, exist_ok=True)

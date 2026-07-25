@@ -2,16 +2,17 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from app import FilePlotApp
+from app import FilePlotApp, APP_STYLESHEET
 
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyleSheet(APP_STYLESHEET)
 
-    # Root paths for testing environments
-    initial_dir = "/Users/luca/PycharmProjects/Rocketry Dispersion Zone Analysis/Plugin Exports/"
-
-    window = FilePlotApp(initial_dir=initial_dir)
+    # No hardcoded path: FilePlotApp remembers the last directory you picked files
+    # from (via QSettings) and reopens there next time, defaulting to your home
+    # directory on first run. Pass initial_dir="..." here if you want to override that.
+    window = FilePlotApp()
     window.resize(1200, 800)
     window.show()
 
