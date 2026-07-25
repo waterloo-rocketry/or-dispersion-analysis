@@ -1,16 +1,22 @@
-import tkinter as tk
-from app import FilePlotApp
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+from app import FilePlotApp, APP_STYLESHEET
 
 
 def main():
-    root = tk.Tk()
+    app = QApplication(sys.argv)
+    app.setStyleSheet(APP_STYLESHEET)
 
-    # Root paths for testing environments
-    initial_dir = "/Users/luca/PycharmProjects/Rocketry Dispersion Zone Analysis/Plugin Exports/"
+    # No hardcoded path: FilePlotApp remembers the last directory you picked files
+    # from (via QSettings) and reopens there next time, defaulting to your home
+    # directory on first run. Pass initial_dir="..." here if you want to override that.
+    window = FilePlotApp()
+    window.resize(1200, 800)
+    window.show()
 
-    app = FilePlotApp(root, initial_dir=initial_dir)
-    root.geometry("1200x800")
-    root.mainloop()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

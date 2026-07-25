@@ -1,11 +1,19 @@
 import os
 import numpy as np
 import pandas as pd
-from scipy.stats import chi2
 
 ALTITUDES = [
     110, 320, 500, 800, 1000, 1500, 1900, 3200, 4200, 5600, 7200, 9200, 10400, 11800, 13500, 15800, 17700, 19300, 22000
 ]
+
+# Shared constants. Previously the launch-site coordinates and the 10 NM
+# "waiver" radius were hardcoded as separate literals in multiple places
+# across data_engine.py and plotting.py - centralizing them here means a
+# future change (new pad location, different accuracy radius) only needs
+# to happen in one place.
+LAUNCH_LAT = 47.965378
+LAUNCH_LON = -81.873536
+LC_WAIVER_RADIUS_NM = 10  # Advanced Pad waiver / "accuracy" radius, in nautical miles
 
 
 def _read_csv(file_path):
@@ -169,7 +177,7 @@ def all_names(list_of_files):
 
 class RocketStats:
     def __init__(self, total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
-                 max_landing_distance, avg_lat, avg_lon, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
+                 max_landing_distance, avg_lat, avg_lon, theta, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
         self.total_simulations = total_sims
         self.mean_apogee = mean_apogee
         self.std_apogee = std_apogee
@@ -178,30 +186,36 @@ class RocketStats:
         self.max_landing_distance = max_landing_distance
         self.avg_lat = avg_lat
         self.avg_lon = avg_lon
+        self.theta = theta
         self.accuracy_launches = accuracy_launches
         self.mean_min_stability = mean_min_stability
         self.mean_lateral_velocity = mean_lateral_velocity
         self.mean_wind_speed = mean_wind_speed
 
 
-def coordinate_stats(historical_file_path):
-    file_label = os.path.basename(historical_file_path)
-    launch_data_frame = _read_csv(historical_file_path)
-
-    total_sims = len(launch_data_frame)
+def coordinate_stats(data, file_label=""):
+    """
+    Computes summary statistics for an already-loaded launch-simulation DataFrame.
+    :param data:        pandas DataFrame for a single launch CSV. Callers are responsible for
+                        loading (and ideally caching) this DataFrame themselves - this function
+                        no longer reads the CSV from disk, so the same DataFrame can be reused
+                        across the stats panel, the main plot, and outlier analysis without
+                        re-parsing the file each time.
+    :param file_label:  optional filename/context to include in error messages
+    :return:            RocketStats
+    """
+    total_sims = len(data)
 
     # Apogee
-    apogee_series = _find_col(launch_data_frame, 'Apogee', file_label)
+    apogee_series = _find_col(data, 'Apogee', file_label)
     mean_apogee = round(apogee_series.mean(), 3)
     std_apogee = round(apogee_series.std(), 3)
 
     # Lat and Lon for Haversine distances
-    lat_series = _find_col(launch_data_frame, 'Landing Latitude', file_label)
-    lon_series = _find_col(launch_data_frame, 'Landing Longitude', file_label)
+    lat_series = _find_col(data, 'Landing Latitude', file_label)
+    lon_series = _find_col(data, 'Landing Longitude', file_label)
 
-    # Hardcoded Advanced Pad coordinates
-    launch_lat, launch_lon = 47.965378, -81.873536
-    landing_distances = haversine_nm(launch_lat, launch_lon, lat_series, lon_series)
+    landing_distances = haversine_nm(LAUNCH_LAT, LAUNCH_LON, lat_series, lon_series)
 
     # NOTE: haversine_nm() returns NAUTICAL miles (R_nm = 3443.92 NM). These are
     # NOT converted to statute miles - the UI label should say "NM", not "miles"
@@ -214,19 +228,26 @@ def coordinate_stats(historical_file_path):
     avg_lat = round(lat_series.mean(), 6)
     avg_lon = round(lon_series.mean(), 6)
 
-    successes = (landing_distances <= 10).sum()
+    delta_lat = avg_lat - LAUNCH_LAT
+    delta_lon = (avg_lon - LAUNCH_LON) * np.cos(np.deg2rad(LAUNCH_LAT))
+
+    theta = round(np.rad2deg(np.atan2(delta_lat, delta_lon)), 2)
+
+    successes = (landing_distances <= LC_WAIVER_RADIUS_NM).sum()
     accuracy_launches = successes / total_sims if total_sims > 0 else 0
 
     # Stability
-    stability_series = _find_col(launch_data_frame, 'Min Stability', file_label)
+    stability_series = _find_col(data, 'Min Stability', file_label)
     mean_min_stability = round(stability_series.mean(), 3)
 
     # Lateral Velocity
-    lateral_vel_series = _find_col(launch_data_frame, 'Lateral Velocity at Apogee', file_label)
+    lateral_vel_series = _find_col(data, 'Lateral Velocity at Apogee', file_label)
     mean_lateral_velocity = round(lateral_vel_series.mean(), 3)
 
-    # Wind Speed
-    wind_series = _find_col(launch_data_frame, 'Max Windspeed', file_label)
+    # Wind Speed - assumed to already be in knots. All wind-speed analysis in
+    # this app (here, in analyze_outlier_winds, and in plotting.py) is
+    # conducted in knots; values are used as-is with no unit conversion.
+    wind_series = _find_col(data, 'Max Windspeed', file_label)
     mean_wind_speed = round(wind_series.mean(), 3)
 
     return RocketStats(
@@ -238,6 +259,7 @@ def coordinate_stats(historical_file_path):
         max_landing_distance,
         avg_lat,
         avg_lon,
+        theta,
         accuracy_launches,
         mean_min_stability,
         mean_lateral_velocity,
@@ -259,23 +281,24 @@ def circular_diff(a, b):
     return 180 - abs(abs(a - b) - 180)
 
 
-def analyze_outlier_winds(historical_file, sim_parameters_file):
-    """Extracts all >10 NM outliers and computes aggregate atmospheric statistics."""
-    launch_lat, launch_lon = 47.965378, -81.873536
-
-    sim_params = _read_csv(sim_parameters_file)
-    sim_results = _read_csv(historical_file)
-
+def analyze_outlier_winds(sim_results, sim_params):
+    """
+    Extracts all outliers beyond LC_WAIVER_RADIUS_NM and computes aggregate atmospheric statistics.
+    :param sim_results: pandas DataFrame already loaded from the historical/launch-results CSV
+    :param sim_params:  pandas DataFrame already loaded from the sim-parameters (wind profile) CSV
+                        Both are caller-loaded/cached DataFrames rather than file paths, so this
+                        function no longer re-reads either CSV from disk itself.
+    """
     if 'date' in sim_params.columns:
         sim_params = sim_params.set_index('date')
     if 'Simulation' in sim_results.columns:
         sim_results = sim_results.set_index('Simulation')
 
     outlier_names = get_outliers(
-        radius_nm=10,
+        radius_nm=LC_WAIVER_RADIUS_NM,
         data=sim_results,
-        ref_latitude=launch_lat,
-        ref_longitude=launch_lon
+        ref_latitude=LAUNCH_LAT,
+        ref_longitude=LAUNCH_LON
     )
 
     if not outlier_names:
