@@ -13,8 +13,16 @@ from scipy.stats import chi2
 
 # Imports from data_engine.py
 from data_engine import (
-    generate_labels, _extract_columns, ellipse_math, haversine_nm, ALTITUDES, _read_csv,
-    LAUNCH_LAT, LAUNCH_LON, LC_WAIVER_RADIUS_NM
+    generate_labels,
+    _extract_columns,
+    ellipse_math,
+    haversine_nm,
+    compute_water_landings,
+    ALTITUDES,
+    _read_csv,
+    LAUNCH_LAT,
+    LAUNCH_LON,
+    LC_WAIVER_RADIUS_NM
 )
 
 TOP_OUTLIERS_COUNT  = 20
@@ -130,7 +138,7 @@ def plot_known_locations(launch_lon, launch_lat, ax):
 
 
 def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse,
-                       confidence, plot_top_outliers=True, data_by_path=None):
+                       confidence, plot_top_outliers=True, plot_water_landings=True, data_by_path=None):
     """
     Core logic to populate a matplotlib Axes object with the dispersion data.
     Plots all files: rocket and payload scatter points plus optional ellipses onto ax.
@@ -140,6 +148,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     :param plot_LC_ellipse:         bool, user-option to plot arbitrary 10nm radius around advanced pad launch site
     :param plot_sigma_ellipses:     bool, user-option to plot ellipses enclosing n * standard deviation
     :param plot_confidence_ellipse: bool, user-option to plot ellipse enclosing n% of data points
+    :param plot_water_landings:     bool, user-option to plot water landings enclosing n% of data points
     :param confidence:              float, user-option specifying perecentage of data points to enclose
     :param plot_top_outliers:       bool, user-option to plot/circle top outliers on the map
     :param data_by_path:            optional dict mapping file_path -> already-loaded pandas DataFrame.
@@ -167,7 +176,13 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
 
         rocket_lat, rocket_lon, payload_lat, payload_lon = _extract_columns(data)
 
+        lakes_file = LC_GEOGRAPHY_DIR / "lakes.geojson"  # Or your local shapefile path
+        water_indices = []
+
         if rocket_lon is not None:
+            # Compute water hits for visual overlay
+            _, _, water_indices = compute_water_landings(data, rocket_lat, rocket_lon, lakes_file)
+
             ax.scatter(
                 rocket_lon,
                 rocket_lat,
@@ -179,11 +194,24 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                 label=label
             )
 
+            # Check the new flag before visually highlighting water landing points
+            if plot_water_landings and water_indices:
+                water_lats = rocket_lat.loc[water_indices].values
+                water_lons = rocket_lon.loc[water_indices].values
+                ax.scatter(
+                    water_lons, water_lats,
+                    facecolors="none",
+                    edgecolors="cyan",
+                    s=35,
+                    linewidths=1.2,
+                    # label=f"Water Landings",
+                    zorder=4
+                )
+
             if plot_top_outliers:
                 distances = haversine_nm(LAUNCH_LAT, LAUNCH_LON, rocket_lat, rocket_lon)
                 uh_ohs = distances.nlargest(TOP_OUTLIERS_COUNT)
 
-                # Single vectorized scatter call instead of one ax.scatter() per point
                 pts_lat = rocket_lat.loc[uh_ohs.index].values
                 pts_lon = rocket_lon.loc[uh_ohs.index].values
                 ax.scatter(
@@ -191,8 +219,9 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                     pts_lat,
                     facecolors="none",
                     edgecolors="xkcd:dandelion",
-                    s=60,
-                    linewidths=1.5,
+                    s=40,
+                    linewidths=1.2,
+                    # label=f"Outliers",
                     zorder=5
                 )
 

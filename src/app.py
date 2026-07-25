@@ -13,9 +13,25 @@ from matplotlib.figure import Figure
 from matplotlib.colors import to_hex
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 
-from data_engine import all_names, coordinate_stats, analyze_outlier_winds, _read_csv, LC_WAIVER_RADIUS_NM
-from plotting import (get_colors, make_safe_filename, plot_data, save_plot, set_default_style,
-                      plot_outlier_analysis, TOP_OUTLIERS_COUNT)
+from data_engine import (
+    all_names,
+    coordinate_stats,
+    analyze_outlier_winds,
+    _read_csv,
+    _find_col,
+    LC_WAIVER_RADIUS_NM,
+    compute_water_landings
+)
+from plotting import (
+    get_colors,
+    make_safe_filename,
+    plot_data,
+    save_plot,
+    set_default_style,
+    plot_outlier_analysis,
+    TOP_OUTLIERS_COUNT,
+    LC_GEOGRAPHY_DIR
+)
 
 
 # Centralized dark theme, applied once at the QApplication level (see main.py) so every
@@ -241,11 +257,18 @@ class FilePlotApp(QMainWindow):
         self.LC_ellipse_box.setChecked(True)
         self.sigma_ellipse_box = QCheckBox("Plot Sigma Ellipses")
         self.confidence_ellipse_box = QCheckBox("Plot Confidence Ellipse")
-        self.top_outliers_box = QCheckBox(f"Highlight Top {TOP_OUTLIERS_COUNT} Outliers")
+        self.water_landings_box = QCheckBox("Plot Water Landings (cyan)")
+        self.water_landings_box.setChecked(True)
+        self.top_outliers_box = QCheckBox(f"Highlight Top {TOP_OUTLIERS_COUNT} Outliers (yellow)")
         self.top_outliers_box.setChecked(True)
 
-        for box in (self.LC_ellipse_box, self.sigma_ellipse_box,
-                    self.confidence_ellipse_box, self.top_outliers_box):
+        for box in (
+                self.LC_ellipse_box,
+                self.sigma_ellipse_box,
+                self.confidence_ellipse_box,
+                self.water_landings_box,
+                self.top_outliers_box
+        ):
             checkbox_layout.addWidget(box)
 
         self.confidence_container = QWidget()
@@ -347,7 +370,7 @@ class FilePlotApp(QMainWindow):
         Wires widget signals to their change handlers.
         :return:
         """
-        for box in (self.LC_ellipse_box, self.sigma_ellipse_box, self.top_outliers_box):
+        for box in (self.LC_ellipse_box, self.sigma_ellipse_box, self.water_landings_box, self.top_outliers_box):
             box.toggled.connect(self._on_plot_option_changed)
         self.confidence_ellipse_box.toggled.connect(self._toggle_confidence_entry)
         self.title_entry.textChanged.connect(self._on_plot_option_changed)
@@ -524,6 +547,7 @@ class FilePlotApp(QMainWindow):
 
         plot_title = self.title_entry.text()
         top_outliers_flag = self.top_outliers_box.isChecked()
+        water_landings_flag = self.water_landings_box.isChecked()
 
 
         def _do_plot(data_by_path):
@@ -538,7 +562,8 @@ class FilePlotApp(QMainWindow):
                     plot_sigma_ellipses=sigma_flag,
                     plot_confidence_ellipse=confidence_flag,
                     confidence=confidence_level,
-                    plot_top_outliers=top_outliers_flag
+                    plot_top_outliers=top_outliers_flag,
+                    plot_water_landings=water_landings_flag
                 ) or {}
                 self.canvas.draw()
                 self._populate_stats_panel()
@@ -589,6 +614,14 @@ class FilePlotApp(QMainWindow):
             header_layout.addStretch()
             inner_layout.addLayout(header_layout)
 
+            # Inside _populate_stats_panel in app.py[cite: 1]:
+            lakes_file = LC_GEOGRAPHY_DIR / "lakes.geojson"
+
+            lat_series = _find_col(data, 'Landing Latitude', file_name)
+            lon_series = _find_col(data, 'Landing Longitude', file_name)
+
+            water_count, water_prob, _ = compute_water_landings(data, lat_series, lon_series, lakes_file)
+
             # Stats grid layout
             stats_grid = QGridLayout()
             rows = [
@@ -600,6 +633,7 @@ class FilePlotApp(QMainWindow):
                 ("Max Landing Distance", f"{stats.max_landing_distance:.1f} NM"),
                 ("Avg Landing Coordinates", f"({stats.avg_lat}, {stats.avg_lon})"),
                 (f"Accuracy (within {LC_WAIVER_RADIUS_NM} NM)", f"{stats.accuracy_launches * 100:.1f}%"),
+                ("Water Landing Probability", f"{water_prob:.2f}% ({water_count} sims)"),
                 ("Mean Min Stability", f"{stats.mean_min_stability:.3f}"),
                 ("Mean Lateral Velocity", f"{stats.mean_lateral_velocity:.2f} m/s"),
                 ("Mean Wind Speed", f"{stats.mean_wind_speed:.2f} kn"),
@@ -801,7 +835,8 @@ class FilePlotApp(QMainWindow):
                     plot_sigma_ellipses=sigma_flag,
                     plot_confidence_ellipse=confidence_flag,
                     confidence=confidence_level,
-                    plot_top_outliers=self.top_outliers_box.isChecked()
+                    plot_top_outliers=self.top_outliers_box.isChecked(),
+                    plot_water_landings=self.water_landings_box.isChecked()
                 )
                 self.statusBar().showMessage(f"Plot saved: '{plot_title}'")
             except Exception as error:

@@ -1,6 +1,9 @@
 import os
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+
+from shapely.geometry import Point
 
 ALTITUDES = [
     110, 320, 500, 800, 1000, 1500, 1900, 3200, 4200, 5600, 7200, 9200, 10400, 11800, 13500, 15800, 17700, 19300, 22000
@@ -177,7 +180,8 @@ def all_names(list_of_files):
 
 class RocketStats:
     def __init__(self, total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
-                 max_landing_distance, avg_lat, avg_lon, theta, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
+                 max_landing_distance, avg_lat, avg_lon, theta, accuracy_launches, mean_min_stability,
+                 mean_lateral_velocity, mean_wind_speed, water_landing_count=0, water_landing_probability=0.0):
         self.total_simulations = total_sims
         self.mean_apogee = mean_apogee
         self.std_apogee = std_apogee
@@ -191,6 +195,8 @@ class RocketStats:
         self.mean_min_stability = mean_min_stability
         self.mean_lateral_velocity = mean_lateral_velocity
         self.mean_wind_speed = mean_wind_speed
+        self.water_landing_count = water_landing_count
+        self.water_landing_probability = water_landing_probability
 
 
 def coordinate_stats(data, file_label=""):
@@ -377,3 +383,33 @@ def analyze_outlier_winds(sim_results, sim_params):
                 summary_stats["overall_max_speed_alt"] = alt
 
     return outliers, summary_stats
+
+
+def compute_water_landings(data, lat_series, lon_series, shapefile_path):
+    """
+    Checks simulation landing points against a local offline lake polygon file.
+    """
+    if not os.path.exists(shapefile_path):
+        return 0, 0.0, []
+
+    # Build GeoDataFrame of landing points
+    geometry = [Point(lon, lat) for lon, lat in zip(lon_series, lat_series)]
+    points_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
+
+    # Load local waterbody file
+    lakes_gdf = gpd.read_file(shapefile_path).to_crs("EPSG:4326")
+
+    # Spatial join
+    joined = gpd.sjoin(points_gdf, lakes_gdf, how="left", predicate="within")
+    in_water = joined[joined["index_right"].notna()]
+
+    total_sims = len(data)
+    water_count = len(in_water)
+    water_prob = (water_count / total_sims) * 100 if total_sims > 0 else 0.0
+
+    lake_name_col = next((c for c in lakes_gdf.columns if c.lower() in ["name", "water_name", "lake_name"]), None)
+    if lake_name_col and lake_name_col in in_water.columns:
+        breakdown = in_water[lake_name_col].fillna("Unnamed Lake").value_counts().to_dict()
+        print(f">> Lake Landing Breakdown for current file: {breakdown}")
+
+    return water_count, water_prob, in_water.index.tolist()
