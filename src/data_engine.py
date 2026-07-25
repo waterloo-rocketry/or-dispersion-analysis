@@ -177,7 +177,7 @@ def all_names(list_of_files):
 
 class RocketStats:
     def __init__(self, total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
-                 max_landing_distance, avg_lat, avg_lon, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
+                 max_landing_distance, avg_lat, avg_lon, theta, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
         self.total_simulations = total_sims
         self.mean_apogee = mean_apogee
         self.std_apogee = std_apogee
@@ -186,6 +186,7 @@ class RocketStats:
         self.max_landing_distance = max_landing_distance
         self.avg_lat = avg_lat
         self.avg_lon = avg_lon
+        self.theta = theta
         self.accuracy_launches = accuracy_launches
         self.mean_min_stability = mean_min_stability
         self.mean_lateral_velocity = mean_lateral_velocity
@@ -227,6 +228,11 @@ def coordinate_stats(data, file_label=""):
     avg_lat = round(lat_series.mean(), 6)
     avg_lon = round(lon_series.mean(), 6)
 
+    delta_lat = avg_lat - LAUNCH_LAT
+    delta_lon = (avg_lon - LAUNCH_LON) * np.cos(np.deg2rad(LAUNCH_LAT))
+
+    theta = round(np.rad2deg(np.atan2(delta_lat, delta_lon)), 2)
+
     successes = (landing_distances <= LC_WAIVER_RADIUS_NM).sum()
     accuracy_launches = successes / total_sims if total_sims > 0 else 0
 
@@ -253,6 +259,7 @@ def coordinate_stats(data, file_label=""):
         max_landing_distance,
         avg_lat,
         avg_lon,
+        theta,
         accuracy_launches,
         mean_min_stability,
         mean_lateral_velocity,

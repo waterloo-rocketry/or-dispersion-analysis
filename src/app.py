@@ -595,7 +595,7 @@ class FilePlotApp(QMainWindow):
                 ("Total Simulations", f"{stats.total_simulations}"),
                 ("Mean Apogee", f"{stats.mean_apogee:,} ft"),
                 ("Std Dev Apogee", f"{stats.std_apogee:.1f} ft"),
-                ("Mean Landing Distance", f"{stats.mean_landing_distance:.1f} NM"),
+                ("Mean Landing Distance", f"{stats.mean_landing_distance:.1f} NM @ {stats.theta % 360}°"),
                 ("Std Dev Landing Dist.", f"{stats.std_landing_distance:.1f} NM"),
                 ("Max Landing Distance", f"{stats.max_landing_distance:.1f} NM"),
                 ("Avg Landing Coordinates", f"({stats.avg_lat}, {stats.avg_lon})"),
