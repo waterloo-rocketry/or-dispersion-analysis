@@ -1,4 +1,5 @@
 import os
+import threading
 
 import pandas as pd
 
@@ -6,7 +7,7 @@ from PySide6.QtCore import Qt, QSettings, QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QLineEdit, QCheckBox, QGroupBox, QScrollArea,
-    QFrame, QFileDialog, QMessageBox, QDialog, QDockWidget, QApplication
+    QFrame, QFileDialog, QMessageBox, QDialog, QApplication
 )
 
 from matplotlib.figure import Figure
@@ -114,18 +115,20 @@ class _CsvLoaderWorker(QObject):
     """
     finished = Signal(dict, str)  # (path -> DataFrame, error message or "" on success)
 
-    def __init__(self, paths, cache):
+    def __init__(self, paths, cache, cache_lock):
         super().__init__()
         self._paths = paths
         self._cache = cache
+        self._cache_lock = cache_lock
 
     def run(self):
         try:
             result = {}
             for path in self._paths:
-                if path not in self._cache:
-                    self._cache[path] = _read_csv(path)
-                result[path] = self._cache[path]
+                with self._cache_lock:
+                    if path not in self._cache:
+                        self._cache[path] = _read_csv(path)
+                    result[path] = self._cache[path]
             self.finished.emit(result, "")
         except Exception as e:
             self.finished.emit({}, str(e))
@@ -140,6 +143,10 @@ class OutlierWindow(QDialog):
     def __init__(self, parent, fig):
         super().__init__(parent)
         self._fig = fig
+        # Non-modal dialogs are only hidden on close by default, not destroyed - without
+        # this, repeatedly opening wind-analysis windows across several plot/replot cycles
+        # would accumulate hidden-but-still-alive QDialog objects over the session.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
     def closeEvent(self, event):
         self._fig.clear()
@@ -167,6 +174,8 @@ class FilePlotApp(QMainWindow):
         self.outlier_date_summary = {}
         self._sim_param_files = {}
         self._csv_cache = {}
+        self._csv_cache_lock = threading.Lock()
+        self._water_cache = {}
         self._wind_windows = {}
         self._loader_thread = None
         self._loader_worker = None
@@ -390,9 +399,28 @@ class FilePlotApp(QMainWindow):
         Routing every read through this cache means each file is only ever parsed once per
         selection.
         """
-        if file_path not in self._csv_cache:
-            self._csv_cache[file_path] = _read_csv(file_path)
-        return self._csv_cache[file_path]
+        with self._csv_cache_lock:
+            if file_path not in self._csv_cache:
+                self._csv_cache[file_path] = _read_csv(file_path)
+            return self._csv_cache[file_path]
+
+
+    def _get_water_landing(self, file_path):
+        """
+        Returns a cached (water_count, water_prob, water_indices) result for file_path,
+        computing it only the first time it's requested for the current file selection.
+        This spatial join was previously recomputed independently for the main plot's
+        cyan water-landing overlay and again for the stats panel's "Water Landing
+        Probability" figure - once each, every time either was refreshed.
+        """
+        if file_path not in self._water_cache:
+            data = self._load_csv(file_path)
+            file_name = os.path.basename(file_path)
+            lat_series = _find_col(data, 'Landing Latitude', file_name)
+            lon_series = _find_col(data, 'Landing Longitude', file_name)
+            lakes_file = LC_GEOGRAPHY_DIR / "lakes.geojson"
+            self._water_cache[file_path] = compute_water_landings(data, lat_series, lon_series, lakes_file, file_name)
+        return self._water_cache[file_path]
 
 
     def _set_busy(self, busy):
@@ -418,7 +446,7 @@ class FilePlotApp(QMainWindow):
         self._current_on_done = on_done
 
         self._loader_thread = QThread(self)
-        self._loader_worker = _CsvLoaderWorker(paths, self._csv_cache)
+        self._loader_worker = _CsvLoaderWorker(paths, self._csv_cache, self._csv_cache_lock)
         self._loader_worker.moveToThread(self._loader_thread)
         self._loader_thread.started.connect(self._loader_worker.run)
 
@@ -464,6 +492,17 @@ class FilePlotApp(QMainWindow):
         self.file_paths = list(files)
         self.launch_names = list(all_names(self.file_paths))
         self._csv_cache = {}  # selection changed - drop any stale cached DataFrames
+        self._water_cache = {}
+
+        # `active_paths` (and the stats panel showing them) reflect whatever was last
+        # plotted, which is now a stale selection - previously this was left in place,
+        # so "Export Stats" after selecting new files but before re-plotting would
+        # silently export stats for the old selection (and try to re-read old files that
+        # may no longer exist at that path). Clearing it here means "Export Stats" falls
+        # through to its existing "please plot at least one file" guard instead.
+        self.active_paths = []
+        self.stats_window.hide()
+        self.stats_toggle_btn.setChecked(False)
 
         # Remember this directory so next launch starts here instead of the user
         # having to navigate back to it manually.
@@ -552,12 +591,14 @@ class FilePlotApp(QMainWindow):
 
         def _do_plot(data_by_path):
             try:
+                water_by_path = {p: self._get_water_landing(p) for p in self.active_paths}
                 self.outlier_date_summary = plot_data(
                     file_paths=self.active_paths,
                     plot_title=plot_title,
                     fig=self.fig,
                     ax=self.ax,
                     data_by_path=data_by_path,
+                    water_by_path=water_by_path,
                     plot_LC_ellipse=LC_flag,
                     plot_sigma_ellipses=sigma_flag,
                     plot_confidence_ellipse=confidence_flag,
@@ -614,13 +655,7 @@ class FilePlotApp(QMainWindow):
             header_layout.addStretch()
             inner_layout.addLayout(header_layout)
 
-            # Inside _populate_stats_panel in app.py[cite: 1]:
-            lakes_file = LC_GEOGRAPHY_DIR / "lakes.geojson"
-
-            lat_series = _find_col(data, 'Landing Latitude', file_name)
-            lon_series = _find_col(data, 'Landing Longitude', file_name)
-
-            water_count, water_prob, _ = compute_water_landings(data, lat_series, lon_series, lakes_file)
+            water_count, water_prob, _ = self._get_water_landing(file_path)
 
             # Stats grid layout
             stats_grid = QGridLayout()
@@ -708,6 +743,16 @@ class FilePlotApp(QMainWindow):
             win.setWindowTitle(f"Outlier Wind Analysis — {os.path.basename(hist_path)}")
             win.resize(1050, 650)
             self._wind_windows[i] = win
+
+            # WA_DeleteOnClose means `win` is actually destroyed (asynchronously) after
+            # closing, not just hidden - drop the now-dangling dict entry when that
+            # happens. Guarded by identity so this can't accidentally remove a *newer*
+            # window that reused the same index `i` in the meantime.
+            win.destroyed.connect(
+                lambda _obj=None, idx=i, w=win: (
+                    self._wind_windows.pop(idx, None) if self._wind_windows.get(idx) is w else None
+                )
+            )
 
             # Structure window: Left (Plot 75%), Right (Sidebar 25%)
             main_layout = QHBoxLayout(win)
@@ -826,11 +871,13 @@ class FilePlotApp(QMainWindow):
 
         def _do_save(data_by_path):
             try:
+                water_by_path = {p: self._get_water_landing(p) for p in self.file_paths}
                 save_plot(
                     file_paths=self.file_paths,
                     plot_title=plot_title,
                     output_path=save_path,
                     data_by_path=data_by_path,
+                    water_by_path=water_by_path,
                     plot_LC_ellipse=LC_flag,
                     plot_sigma_ellipses=sigma_flag,
                     plot_confidence_ellipse=confidence_flag,
@@ -866,36 +913,43 @@ class FilePlotApp(QMainWindow):
             self.statusBar().showMessage("Export cancelled")
             return
 
-        try:
-            rows = []
-            for file_path in self.active_paths:
-                file_name = os.path.basename(file_path)
-                data = self._load_csv(file_path)
-                stats = coordinate_stats(data, file_label=file_name)
-                rows.append({
-                    "File": file_name,
-                    "Total Simulations": stats.total_simulations,
-                    "Mean Apogee (ft)": stats.mean_apogee,
-                    "Std Dev Apogee (ft)": stats.std_apogee,
-                    "Mean Landing Distance (NM)": stats.mean_landing_distance,
-                    "Std Dev Landing Distance (NM)": stats.std_landing_distance,
-                    "Max Landing Distance (NM)": stats.max_landing_distance,
-                    "Avg Landing Latitude": stats.avg_lat,
-                    "Avg Landing Longitude": stats.avg_lon,
-                    f"Accuracy (within {LC_WAIVER_RADIUS_NM} NM) %": stats.accuracy_launches * 100,
-                    "Mean Min Stability": stats.mean_min_stability,
-                    "Mean Lateral Velocity (m/s)": stats.mean_lateral_velocity,
-                    "Mean Wind Speed (kn)": stats.mean_wind_speed,
-                })
+        def _do_export(data_by_path):
+            try:
+                rows = []
+                for file_path in self.active_paths:
+                    file_name = os.path.basename(file_path)
+                    data = data_by_path[file_path]
+                    stats = coordinate_stats(data, file_label=file_name)
+                    rows.append({
+                        "File": file_name,
+                        "Total Simulations": stats.total_simulations,
+                        "Mean Apogee (ft)": stats.mean_apogee,
+                        "Std Dev Apogee (ft)": stats.std_apogee,
+                        "Mean Landing Distance (NM)": stats.mean_landing_distance,
+                        "Std Dev Landing Distance (NM)": stats.std_landing_distance,
+                        "Max Landing Distance (NM)": stats.max_landing_distance,
+                        "Avg Landing Latitude": stats.avg_lat,
+                        "Avg Landing Longitude": stats.avg_lon,
+                        f"Accuracy (within {LC_WAIVER_RADIUS_NM} NM) %": stats.accuracy_launches * 100,
+                        "Mean Min Stability": stats.mean_min_stability,
+                        "Mean Lateral Velocity (m/s)": stats.mean_lateral_velocity,
+                        "Mean Wind Speed (kn)": stats.mean_wind_speed,
+                    })
 
-            pd.DataFrame(rows).to_csv(save_path, index=False)
-            self.statusBar().showMessage(f"Stats exported: '{os.path.basename(save_path)}'")
-        except Exception as error:
-            QMessageBox.critical(
-                self, "Export error",
-                f"An error occurred while exporting stats:\n{error}"
-            )
-            self.statusBar().showMessage("Export error")
+                pd.DataFrame(rows).to_csv(save_path, index=False)
+                self.statusBar().showMessage(f"Stats exported: '{os.path.basename(save_path)}'")
+            except Exception as error:
+                QMessageBox.critical(
+                    self, "Export error",
+                    f"An error occurred while exporting stats:\n{error}"
+                )
+                self.statusBar().showMessage("Export error")
+
+        # Previously this read each CSV synchronously on the GUI thread via self._load_csv,
+        # unlike every other CSV-touching action in the app - meaning a cache miss here
+        # (e.g. right after a fresh selection) could freeze the UI on a large file. Routing
+        # through _load_csvs_async keeps this consistent with plot_selected/save_file.
+        self._load_csvs_async(self.active_paths, _do_export)
 
 
     def clear_all(self):
@@ -912,6 +966,15 @@ class FilePlotApp(QMainWindow):
         self.file_checks = []
         self.active_paths = []
         self._csv_cache = {}
+        self._water_cache = {}
+        self._sim_param_files = {}
+
+        # Close any open outlier-wind windows rather than leaving them floating around
+        # showing stats for files that "Clear" just dropped from the app entirely.
+        for win in list(self._wind_windows.values()):
+            if win.isVisible():
+                win.close()
+        self._wind_windows = {}
 
         self.ax.clear()
         self.canvas.draw()

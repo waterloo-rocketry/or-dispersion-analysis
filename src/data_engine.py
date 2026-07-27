@@ -83,7 +83,6 @@ def generate_labels(file_paths):
         name = name.replace("_", " ").replace("-", " ")
         label = name.title()
         labels.append(label)
-    print(labels)
     return labels
 
 
@@ -237,7 +236,7 @@ def coordinate_stats(data, file_label=""):
     delta_lat = avg_lat - LAUNCH_LAT
     delta_lon = (avg_lon - LAUNCH_LON) * np.cos(np.deg2rad(LAUNCH_LAT))
 
-    theta = round(np.rad2deg(np.atan2(delta_lat, delta_lon)), 2)
+    theta = round(np.rad2deg(np.arctan2(delta_lat, delta_lon)), 2)
 
     successes = (landing_distances <= LC_WAIVER_RADIUS_NM).sum()
     accuracy_launches = successes / total_sims if total_sims > 0 else 0
@@ -385,7 +384,25 @@ def analyze_outlier_winds(sim_results, sim_params):
     return outliers, summary_stats
 
 
-def compute_water_landings(data, lat_series, lon_series, shapefile_path):
+_LAKES_GDF_CACHE = {}
+
+
+def _load_lakes_gdf(shapefile_path):
+    """
+    Loads and reprojects the local lake/waterbody file once per path, caching the result
+    at module level. The shapefile doesn't change during a run, but previously it was
+    independently re-read from disk and re-reprojected on every single call to
+    compute_water_landings - i.e. once per file, every time a plot, save, or stats-panel
+    refresh happened. Callers that want a hard refresh (e.g. if the underlying file is
+    replaced on disk mid-session) can clear this dict directly.
+    """
+    key = str(shapefile_path)
+    if key not in _LAKES_GDF_CACHE:
+        _LAKES_GDF_CACHE[key] = gpd.read_file(shapefile_path).to_crs("EPSG:4326")
+    return _LAKES_GDF_CACHE[key]
+
+
+def compute_water_landings(data, lat_series, lon_series, shapefile_path, label):
     """
     Checks simulation landing points against a local offline lake polygon file.
     """
@@ -396,8 +413,8 @@ def compute_water_landings(data, lat_series, lon_series, shapefile_path):
     geometry = [Point(lon, lat) for lon, lat in zip(lon_series, lat_series)]
     points_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
 
-    # Load local waterbody file
-    lakes_gdf = gpd.read_file(shapefile_path).to_crs("EPSG:4326")
+    # Load local waterbody file (cached - see _load_lakes_gdf)
+    lakes_gdf = _load_lakes_gdf(shapefile_path)
 
     # Spatial join
     joined = gpd.sjoin(points_gdf, lakes_gdf, how="left", predicate="within")
@@ -410,6 +427,6 @@ def compute_water_landings(data, lat_series, lon_series, shapefile_path):
     lake_name_col = next((c for c in lakes_gdf.columns if c.lower() in ["name", "water_name", "lake_name"]), None)
     if lake_name_col and lake_name_col in in_water.columns:
         breakdown = in_water[lake_name_col].fillna("Unnamed Lake").value_counts().to_dict()
-        print(f">> Lake Landing Breakdown for current file: {breakdown}")
+        print(f"========== Lake Landing Breakdown for [{label}]==========\n>> {breakdown}")
 
     return water_count, water_prob, in_water.index.tolist()
