@@ -13,12 +13,20 @@ from scipy.stats import chi2
 
 # Imports from data_engine.py
 from data_engine import (
-    generate_labels, _extract_columns, ellipse_math, haversine_nm, ALTITUDES, _read_csv,
-    LAUNCH_LAT, LAUNCH_LON, LC_WAIVER_RADIUS_NM
+    generate_labels,
+    _extract_columns,
+    ellipse_math,
+    haversine_nm,
+    compute_water_landings,
+    ALTITUDES,
+    _read_csv,
+    LAUNCH_LAT,
+    LAUNCH_LON,
+    LC_WAIVER_RADIUS_NM
 )
 
 TOP_OUTLIERS_COUNT  = 20
-LC_GEOGRAPHY_DIR    = Path("../LC Geography")
+LC_GEOGRAPHY_DIR    = Path(__file__).resolve().parent.parent / "LC Geography"
 
 # 1 nautical mile, in meters - used to convert LC_WAIVER_RADIUS_NM into the
 # geographic ellipse geometry below.
@@ -91,6 +99,22 @@ def plot_ellipse(x, y, major, minor, tilt, edge_color, style, name, ax):
     ax.add_patch(ellipse)
 
 
+_HIGHWAY_CSV_CACHE = {}
+
+
+def _load_highway_csv(path):
+    """
+    Loads the static highway reference line once per path and caches it - this file
+    never changes, but was previously re-read from disk on every single plot/save call.
+    Failures aren't cached, so a missing file can still be retried later (e.g. if the
+    user fixes LC_GEOGRAPHY_DIR mid-session).
+    """
+    key = str(path)
+    if key not in _HIGHWAY_CSV_CACHE:
+        _HIGHWAY_CSV_CACHE[key] = pd.read_csv(path)
+    return _HIGHWAY_CSV_CACHE[key]
+
+
 def plot_known_locations(launch_lon, launch_lat, ax):
     """
     Function to plot known launch and obstacle locations around Launch Canada.
@@ -98,7 +122,7 @@ def plot_known_locations(launch_lon, launch_lat, ax):
     lodge_lat = 47.9017898
     lodge_lon = -81.6497071
     try:
-        highway_coords = pd.read_csv(LC_GEOGRAPHY_DIR / "highway_144+101.csv")
+        highway_coords = _load_highway_csv(LC_GEOGRAPHY_DIR / "highway_144+101.csv")
         ax.plot(
             highway_coords["Longitude"],
             highway_coords["Latitude"],
@@ -128,9 +152,29 @@ def plot_known_locations(launch_lon, launch_lat, ax):
         label="Tata Chika Pika Lake Lodge"
     )
 
+#
+# _BASEMAP_SOURCE_CACHE = {}
+#
+#
+# def _get_basemap_source(path):
+#     """
+#     Opens the local basemap raster once and reuses the same rasterio dataset handle
+#     across calls, instead of re-opening/re-parsing the .tif from disk on every single
+#     plot/save. contextily still has to resample per the current view extent each call
+#     (that part's unavoidable - different file selections cover different areas), but
+#     this removes the repeated file-open/header-parse overhead underneath it.
+#     Note: requires a contextily version whose `source` param accepts an open rasterio
+#     dataset; if that ever stops being supported, fall back to passing the path string.
+#     """
+#     key = str(path)
+#     if key not in _BASEMAP_SOURCE_CACHE:
+#         _BASEMAP_SOURCE_CACHE[key] = rasterio.open(key)
+#     return _BASEMAP_SOURCE_CACHE[key]
+
 
 def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_ellipses, plot_confidence_ellipse,
-                       confidence, plot_top_outliers=True, data_by_path=None):
+                       confidence, plot_top_outliers=True, plot_water_landings=True, data_by_path=None,
+                       water_by_path=None):
     """
     Core logic to populate a matplotlib Axes object with the dispersion data.
     Plots all files: rocket and payload scatter points plus optional ellipses onto ax.
@@ -140,6 +184,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     :param plot_LC_ellipse:         bool, user-option to plot arbitrary 10nm radius around advanced pad launch site
     :param plot_sigma_ellipses:     bool, user-option to plot ellipses enclosing n * standard deviation
     :param plot_confidence_ellipse: bool, user-option to plot ellipse enclosing n% of data points
+    :param plot_water_landings:     bool, user-option to plot water landings enclosing n% of data points
     :param confidence:              float, user-option specifying perecentage of data points to enclose
     :param plot_top_outliers:       bool, user-option to plot/circle top outliers on the map
     :param data_by_path:            optional dict mapping file_path -> already-loaded pandas DataFrame.
@@ -147,6 +192,13 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                                     CSV from disk (the caller is expected to load/cache them once, e.g.
                                     right before calling plot_data/save_plot). Falls back to reading from
                                     disk itself when not provided, so this function still works standalone.
+    :param water_by_path:           optional dict mapping file_path -> (water_count, water_prob,
+                                    water_indices), as returned by compute_water_landings. When provided,
+                                    these precomputed results are reused instead of re-running the
+                                    lake spatial join here (the caller is expected to compute this once
+                                    per file, e.g. the same time it loads/caches the CSV, so the same
+                                    join isn't repeated for the main plot overlay and the stats panel
+                                    separately). Falls back to computing it here when not provided.
     :return:                        dict mapping each file_path to a {date: count} summary of its
                                     top-outlier landing dates (empty dict for files with no
                                     'Simulation' column, or where outlier highlighting was skipped)
@@ -167,7 +219,16 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
 
         rocket_lat, rocket_lon, payload_lat, payload_lon = _extract_columns(data)
 
+        lakes_file = LC_GEOGRAPHY_DIR / "lakes.geojson"  # Or your local shapefile path
+
         if rocket_lon is not None:
+            # Reuse the caller's precomputed water-landing result if given, rather than
+            # re-running the (expensive) lake spatial join for the same file's data here.
+            if water_by_path is not None and file_path in water_by_path:
+                _, _, water_indices = water_by_path[file_path]
+            else:
+                _, _, water_indices = compute_water_landings(data, rocket_lat, rocket_lon, lakes_file, label)
+
             ax.scatter(
                 rocket_lon,
                 rocket_lat,
@@ -179,11 +240,24 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                 label=label
             )
 
+            # Check the new flag before visually highlighting water landing points
+            if plot_water_landings and water_indices:
+                water_lats = rocket_lat.loc[water_indices].values
+                water_lons = rocket_lon.loc[water_indices].values
+                ax.scatter(
+                    water_lons, water_lats,
+                    facecolors="none",
+                    edgecolors="cyan",
+                    s=35,
+                    linewidths=1.2,
+                    # label=f"Water Landings",
+                    zorder=4
+                )
+
             if plot_top_outliers:
                 distances = haversine_nm(LAUNCH_LAT, LAUNCH_LON, rocket_lat, rocket_lon)
                 uh_ohs = distances.nlargest(TOP_OUTLIERS_COUNT)
 
-                # Single vectorized scatter call instead of one ax.scatter() per point
                 pts_lat = rocket_lat.loc[uh_ohs.index].values
                 pts_lon = rocket_lon.loc[uh_ohs.index].values
                 ax.scatter(
@@ -191,8 +265,9 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                     pts_lat,
                     facecolors="none",
                     edgecolors="xkcd:dandelion",
-                    s=60,
-                    linewidths=1.5,
+                    s=40,
+                    linewidths=1.2,
+                    # label=f"Outliers",
                     zorder=5
                 )
 
