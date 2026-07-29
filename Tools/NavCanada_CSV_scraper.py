@@ -16,7 +16,7 @@ def uncheck_buttons(page, toggles_to_uncheck):
     for toggle in toggles_to_uncheck:
         checkbox = page.locator(f"#{toggle}")
         checkbox.uncheck()
-        print(f"{toggle} is undechecked")
+        print(f"{toggle} is unchecked")
 
 
 
