@@ -1,6 +1,9 @@
 import os
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+
+from shapely.geometry import Point
 
 ALTITUDES = [
     110, 320, 500, 800, 1000, 1500, 1900, 3200, 4200, 5600, 7200, 9200, 10400, 11800, 13500, 15800, 17700, 19300, 22000
@@ -80,7 +83,6 @@ def generate_labels(file_paths):
         name = name.replace("_", " ").replace("-", " ")
         label = name.title()
         labels.append(label)
-    print(labels)
     return labels
 
 
@@ -177,7 +179,8 @@ def all_names(list_of_files):
 
 class RocketStats:
     def __init__(self, total_sims, mean_apogee, std_apogee, mean_landing_distance, std_landing_distance,
-                 max_landing_distance, avg_lat, avg_lon, accuracy_launches, mean_min_stability, mean_lateral_velocity, mean_wind_speed):
+                 max_landing_distance, avg_lat, avg_lon, theta, accuracy_launches, mean_min_stability,
+                 mean_lateral_velocity, mean_wind_speed, water_landing_count=0, water_landing_probability=0.0):
         self.total_simulations = total_sims
         self.mean_apogee = mean_apogee
         self.std_apogee = std_apogee
@@ -186,10 +189,13 @@ class RocketStats:
         self.max_landing_distance = max_landing_distance
         self.avg_lat = avg_lat
         self.avg_lon = avg_lon
+        self.theta = theta
         self.accuracy_launches = accuracy_launches
         self.mean_min_stability = mean_min_stability
         self.mean_lateral_velocity = mean_lateral_velocity
         self.mean_wind_speed = mean_wind_speed
+        self.water_landing_count = water_landing_count
+        self.water_landing_probability = water_landing_probability
 
 
 def coordinate_stats(data, file_label=""):
@@ -227,6 +233,11 @@ def coordinate_stats(data, file_label=""):
     avg_lat = round(lat_series.mean(), 6)
     avg_lon = round(lon_series.mean(), 6)
 
+    delta_lat = avg_lat - LAUNCH_LAT
+    delta_lon = (avg_lon - LAUNCH_LON) * np.cos(np.deg2rad(LAUNCH_LAT))
+
+    theta = round(np.rad2deg(np.arctan2(delta_lat, delta_lon)), 2)
+
     successes = (landing_distances <= LC_WAIVER_RADIUS_NM).sum()
     accuracy_launches = successes / total_sims if total_sims > 0 else 0
 
@@ -253,6 +264,7 @@ def coordinate_stats(data, file_label=""):
         max_landing_distance,
         avg_lat,
         avg_lon,
+        theta,
         accuracy_launches,
         mean_min_stability,
         mean_lateral_velocity,
@@ -370,3 +382,51 @@ def analyze_outlier_winds(sim_results, sim_params):
                 summary_stats["overall_max_speed_alt"] = alt
 
     return outliers, summary_stats
+
+
+_LAKES_GDF_CACHE = {}
+
+
+def _load_lakes_gdf(shapefile_path):
+    """
+    Loads and reprojects the local lake/waterbody file once per path, caching the result
+    at module level. The shapefile doesn't change during a run, but previously it was
+    independently re-read from disk and re-reprojected on every single call to
+    compute_water_landings - i.e. once per file, every time a plot, save, or stats-panel
+    refresh happened. Callers that want a hard refresh (e.g. if the underlying file is
+    replaced on disk mid-session) can clear this dict directly.
+    """
+    key = str(shapefile_path)
+    if key not in _LAKES_GDF_CACHE:
+        _LAKES_GDF_CACHE[key] = gpd.read_file(shapefile_path).to_crs("EPSG:4326")
+    return _LAKES_GDF_CACHE[key]
+
+
+def compute_water_landings(data, lat_series, lon_series, shapefile_path, label):
+    """
+    Checks simulation landing points against a local offline lake polygon file.
+    """
+    if not os.path.exists(shapefile_path):
+        return 0, 0.0, []
+
+    # Build GeoDataFrame of landing points
+    geometry = [Point(lon, lat) for lon, lat in zip(lon_series, lat_series)]
+    points_gdf = gpd.GeoDataFrame(data, geometry=geometry, crs="EPSG:4326")
+
+    # Load local waterbody file (cached - see _load_lakes_gdf)
+    lakes_gdf = _load_lakes_gdf(shapefile_path)
+
+    # Spatial join
+    joined = gpd.sjoin(points_gdf, lakes_gdf, how="left", predicate="within")
+    in_water = joined[joined["index_right"].notna()]
+
+    total_sims = len(data)
+    water_count = len(in_water)
+    water_prob = (water_count / total_sims) * 100 if total_sims > 0 else 0.0
+
+    lake_name_col = next((c for c in lakes_gdf.columns if c.lower() in ["name", "water_name", "lake_name"]), None)
+    if lake_name_col and lake_name_col in in_water.columns:
+        breakdown = in_water[lake_name_col].fillna("Unnamed Lake").value_counts().to_dict()
+        print(f"========== Lake Landing Breakdown for [{label}]==========\n>> {breakdown}")
+
+    return water_count, water_prob, in_water.index.tolist()
