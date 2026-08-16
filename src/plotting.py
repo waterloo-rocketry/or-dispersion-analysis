@@ -46,7 +46,7 @@ def get_colors(file_paths):
     else:
         colors = cm.viridis(np.linspace(0.25, 1.0, n_files))
 
-    sigma_colors = ["xkcd:red wine", "xkcd:sunflower", "xkcd:cherry red"]
+    sigma_colors = ["xkcd:pale yellow", "xkcd:light orange", "xkcd:light red"]
     return colors, sigma_colors
 
 
@@ -311,7 +311,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                 marker="P",
                 s=80
             )
-            for level, sigma_color in zip([1, 2], sigma_colors):
+            for level, sigma_color in zip([1, 2, 3], sigma_colors):
                 plot_ellipse(
                     x=mean_x,
                     y=mean_y,
