@@ -33,7 +33,7 @@ def main():
     print("--------------------------\n")
 
     # Standard Deviation Modifications
-    edit_choice = input("Would you like to edit the standard deviations? (y/n): ").strip().lower()
+    edit_choice = input("Would you like to edit the wind standard deviations? (y/n): ").strip().lower()
 
     if edit_choice == 'y':
         mod_type = input(
@@ -71,7 +71,7 @@ def main():
         else:
             print("  [!] Invalid choice. Keeping original standard deviations.")
 
-    # Temperature and Pressure Setup
+    # Temperature Setup
     print("\n--- Environmental Parameters ---")
     try:
         temp_input = input("Enter the temperature in °C (default: 15.0): ").strip()
@@ -81,11 +81,26 @@ def main():
         user_temp = 15.0
 
     try:
-        press_input = input("Enter the pressure in hPa (default: 1013.2): ").strip()
+        temp_std_input = input("Enter the temperature standard deviation (default: 0.0): ").strip()
+        user_temp_std = float(temp_std_input) if temp_std_input else 0.0
+    except ValueError:
+        print("  [!] Invalid input. Defaulting to 0.0.")
+        user_temp_std = 0.0
+
+    # Pressure Setup
+    try:
+        press_input = input("\nEnter the pressure in hPa (default: 1013.2): ").strip()
         user_press = float(press_input) if press_input else 1013.2
     except ValueError:
         print("  [!] Invalid input. Defaulting to 1013.2 hPa.")
         user_press = 1013.2
+
+    try:
+        press_std_input = input("Enter the pressure standard deviation (default: 0.0): ").strip()
+        user_press_std = float(press_std_input) if press_std_input else 0.0
+    except ValueError:
+        print("  [!] Invalid input. Defaulting to 0.0.")
+        user_press_std = 0.0
 
     # Number of Simulations
     try:
@@ -121,7 +136,15 @@ def main():
     output_data = []
 
     for i in range(x_sims):
-        row_data = [f"simulation {i + 1}", user_temp, user_press]
+        # Generate randomized temp and pressure (Simulation 1 uses exact means)
+        if i == 0:
+            sim_temp = user_temp
+            sim_press = user_press
+        else:
+            sim_temp = np.random.normal(user_temp, user_temp_std)
+            sim_press = np.random.normal(user_press, user_press_std)
+
+        row_data = [f"simulation {i + 1}", round(sim_temp, 2), round(sim_press, 2)]
 
         for idx, row in df.iterrows():
             mean_speed = row['speed']
@@ -129,7 +152,6 @@ def main():
             mean_dir = row['direction']
             std_dir = row['windDirStdDev']
 
-            # --- THE KEY CHANGE ---
             if i == 0:
                 # Simulation 1: No randomization, strictly use the mean values
                 sim_speed = mean_speed

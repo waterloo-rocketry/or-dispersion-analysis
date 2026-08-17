@@ -14,8 +14,10 @@ ALTITUDES = [
 # across data_engine.py and plotting.py - centralizing them here means a
 # future change (new pad location, different accuracy radius) only needs
 # to happen in one place.
-LAUNCH_LAT = 47.965378
+ALAUNCH_LAT = 47.965378
 LAUNCH_LON = -81.873536
+# BASIC_LAUNCH_LAT = 47.9869503
+# BASIC_LAUNCH_LON = -81.8485488
 LC_WAIVER_RADIUS_NM = 10  # Advanced Pad waiver / "accuracy" radius, in nautical miles
 
 
