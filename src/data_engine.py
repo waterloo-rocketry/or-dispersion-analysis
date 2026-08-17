@@ -14,7 +14,7 @@ ALTITUDES = [
 # across data_engine.py and plotting.py - centralizing them here means a
 # future change (new pad location, different accuracy radius) only needs
 # to happen in one place.
-ALAUNCH_LAT = 47.965378
+LAUNCH_LAT = 47.965378
 LAUNCH_LON = -81.873536
 # BASIC_LAUNCH_LAT = 47.9869503
 # BASIC_LAUNCH_LON = -81.8485488
