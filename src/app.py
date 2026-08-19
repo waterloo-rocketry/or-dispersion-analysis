@@ -21,6 +21,8 @@ from data_engine import (
     _read_csv,
     _find_col,
     LC_WAIVER_RADIUS_NM,
+    METEO_ALTITUDES,
+    NAVCAN_ALTITUDES,
     compute_water_landings
 )
 from plotting import (
@@ -766,7 +768,7 @@ class FilePlotApp(QMainWindow):
             main_layout.addWidget(plot_widget, 3)
             main_layout.addWidget(stats_group, 1)
 
-            outliers, summary = analyze_outlier_winds(sim_results, sim_params)
+            outliers, summary = analyze_outlier_winds(sim_results, sim_params, METEO_ALTITUDES, NAVCAN_ALTITUDES)
 
             # Wind-based Outlier Stats
             if summary.get("total_outliers", 0) > 0:

@@ -1,12 +1,16 @@
 import os
+import re
 import numpy as np
 import pandas as pd
 import geopandas as gpd
 
 from shapely.geometry import Point
 
-ALTITUDES = [
+METEO_ALTITUDES = [
     110, 320, 500, 800, 1000, 1500, 1900, 3200, 4200, 5600, 7200, 9200, 10400, 11800, 13500, 15800, 17700, 19300, 22000
+]
+NAVCAN_ALTITUDES = [
+    914, 1829, 2743, 3658, 5486, 7315, 9144, 10363, 11887, 13716, 16154
 ]
 
 # Shared constants. Previously the launch-site coordinates and the 10 NM
@@ -288,18 +292,47 @@ def circular_diff(a, b):
     return 180 - abs(abs(a - b) - 180)
 
 
-def analyze_outlier_winds(sim_results, sim_params):
+def analyze_outlier_winds(sim_results, sim_params, alt_list_1=None, alt_list_2=None):
     """
     Extracts all outliers beyond LC_WAIVER_RADIUS_NM and computes aggregate atmospheric statistics.
     :param sim_results: pandas DataFrame already loaded from the historical/launch-results CSV
     :param sim_params:  pandas DataFrame already loaded from the sim-parameters (wind profile) CSV
-                        Both are caller-loaded/cached DataFrames rather than file paths, so this
-                        function no longer re-reads either CSV from disk itself.
+    :param alt_list_1:  (Optional) List of altitude numbers to analyze. If None, it will be
+                        automatically inferred from the 'direction [X]' columns in sim_params.
+    :param alt_list_2:  (Optional) List of altitude numbers to analyze. If None, it will be automatically
+                        inferred from the 'direction [X]' columns in sim_params.
     """
     if 'date' in sim_params.columns:
         sim_params = sim_params.set_index('date')
     if 'Simulation' in sim_results.columns:
         sim_results = sim_results.set_index('Simulation')
+
+    sim_params.index = sim_params.index.astype(str).str.strip()
+    sim_results.index = sim_results.index.astype(str).str.strip()
+
+    altitudes = None
+
+    # Check if alt_list_1 matches the dataframe columns
+    if alt_list_1 is not None and all(f"direction [{a}]" in sim_params.columns for a in alt_list_1):
+        altitudes = alt_list_1
+
+    # Check if alt_list_2 matches the dataframe columns
+    elif alt_list_2 is not None and all(f"direction [{a}]" in sim_params.columns for a in alt_list_2):
+        altitudes = alt_list_2
+
+    # Default to regex search if neither list was provided or matched
+    if altitudes is None:
+        inferred_alts = []
+        for col in sim_params.columns:
+            match = re.search(r'direction \[(\d+(?:\.\d+)?)\]', str(col))
+            if match:
+                val = float(match.group(1))
+                inferred_alts.append(int(val) if val.is_integer() else val)
+
+        altitudes = sorted(list(set(inferred_alts)))
+
+        if not altitudes:
+            raise ValueError("Could not infer altitudes from sim_params columns.")
 
     outlier_names = get_outliers(
         radius_nm=LC_WAIVER_RADIUS_NM,
@@ -322,7 +355,8 @@ def analyze_outlier_winds(sim_results, sim_params):
     pop_profile_speeds = []
     pop_profile_dirs = []
 
-    for alt in ALTITUDES:
+    # Replace global ALTITUDES with the local `altitudes` variable
+    for alt in altitudes:
         str_a = str(alt)
         # For per-altitude profile plotting
         if str_a in nominal_params.columns:
@@ -339,14 +373,15 @@ def analyze_outlier_winds(sim_results, sim_params):
             pop_profile_dirs.append(0)
 
     outliers = []
-    speed_matrix = {alt: [] for alt in ALTITUDES}
-    dir_matrix = {alt: [] for alt in ALTITUDES}
+    # Use local `altitudes` for matrix initialization
+    speed_matrix = {alt: [] for alt in altitudes}
+    dir_matrix = {alt: [] for alt in altitudes}
 
     for name in valid_names:
         wind_row = outlier_params.loc[name]
 
         wind_profile = {}
-        for alt in ALTITUDES:
+        for alt in altitudes:
             str_alt = str(alt)
             speed_val = wind_row.get(str_alt, wind_row.get(alt, 0))
             dir_val = wind_row.get(f"direction [{alt}]", 0)
@@ -357,8 +392,8 @@ def analyze_outlier_winds(sim_results, sim_params):
 
         outliers.append({
             "WindProfile": wind_profile,
-            "avg_speed": np.mean([wind_profile[str(alt)]["speed"] for alt in ALTITUDES]),
-            "avg_dir": compute_circular_mean([wind_profile[str(alt)]["direction"] for alt in ALTITUDES])
+            "avg_speed": np.mean([wind_profile[str(alt)]["speed"] for alt in altitudes]),
+            "avg_dir": compute_circular_mean([wind_profile[str(alt)]["direction"] for alt in altitudes])
         })
 
     summary_stats = {
@@ -368,13 +403,15 @@ def analyze_outlier_winds(sim_results, sim_params):
         "overall_max_speed": 0,
         "overall_max_speed_alt": 0,
         "pop_mean_speeds": pop_profile_speeds,  # Passed to plotting.py
-        "pop_mean_dirs": pop_profile_dirs  # Passed to plotting.py
+        "pop_mean_dirs": pop_profile_dirs,  # Passed to plotting.py
+        "altitudes": altitudes
     }
 
     if outliers:
-        for alt in ALTITUDES:
-            mean_spd = np.mean(speed_matrix[alt])
-            mean_dir = compute_circular_mean(dir_matrix[alt])
+        for alt in altitudes:
+            # Added safe fallback if a specific altitude column happened to be empty
+            mean_spd = np.mean(speed_matrix[alt]) if speed_matrix[alt] else 0
+            mean_dir = compute_circular_mean(dir_matrix[alt]) if dir_matrix[alt] else 0
 
             summary_stats["mean_speeds"].append(mean_spd)
             summary_stats["mean_dirs"].append(mean_dir)

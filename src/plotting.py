@@ -18,7 +18,6 @@ from data_engine import (
     ellipse_math,
     haversine_nm,
     compute_water_landings,
-    ALTITUDES,
     _read_csv,
     LAUNCH_LAT,
     LAUNCH_LON,
@@ -467,16 +466,19 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
         ax.text(0.5, 0.5, "No valid outlier profiles found.", ha='center', va='center')
         return
 
+    # Extract the dynamically inferred altitudes here
+    altitudes = summary_stats.get("altitudes", [])
+
     # Overlay individual outliers
     for outlier in outliers:
-        speeds = np.array([outlier["WindProfile"][str(a)]["speed"] for a in ALTITUDES])
-        dirs = np.array([outlier["WindProfile"][str(a)]["direction"] + 180 for a in ALTITUDES])
+        speeds = np.array([outlier["WindProfile"][str(a)]["speed"] for a in altitudes])
+        dirs = np.array([outlier["WindProfile"][str(a)]["direction"] + 180 for a in altitudes])
         dirs = np.where(dirs > 360, dirs - 360, dirs)
         theta = np.deg2rad(dirs)
 
         ax.plot(
             speeds,
-            ALTITUDES,
+            altitudes,
             linestyle='-',
             color='grey',
             linewidth=1,
@@ -484,7 +486,7 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
         )
         ax.quiver(
             speeds,
-            ALTITUDES,
+            altitudes,
             0.4 * np.sin(theta),
             0.4 * np.cos(theta),
             angles='uv',
@@ -503,7 +505,7 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
 
     ax.plot(
         mean_speeds,
-        ALTITUDES,
+        altitudes,
         linestyle='-',
         color='xkcd:cherry red',
         linewidth=3,
@@ -511,7 +513,7 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
     )
     ax.quiver(
         mean_speeds,
-        ALTITUDES, 0.4 * np.sin(mean_theta), 0.4 * np.cos(mean_theta),
+        altitudes, 0.4 * np.sin(mean_theta), 0.4 * np.cos(mean_theta),
         angles='uv',
         scale_units='width',
         width=0.005,
@@ -528,7 +530,7 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
 
         ax.plot(
             pop_speeds,
-            ALTITUDES,
+            altitudes,
             linestyle='--',
             color='xkcd:azure',
             linewidth=3,
@@ -536,7 +538,7 @@ def plot_outlier_analysis(ax, outliers, summary_stats):
         )
         ax.quiver(
             pop_speeds,
-            ALTITUDES, 0.4 * np.sin(pop_theta), 0.4 * np.cos(pop_theta),
+            altitudes, 0.4 * np.sin(pop_theta), 0.4 * np.cos(pop_theta),
             angles='uv',
             scale_units='width',
             width=0.005,
