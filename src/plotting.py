@@ -311,7 +311,7 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
                 marker="P",
                 s=80
             )
-            for level, sigma_color in zip([1, 2, 3], sigma_colors):
+            for level, sigma_color in zip([1, 2], sigma_colors):
                 plot_ellipse(
                     x=mean_x,
                     y=mean_y,
@@ -449,15 +449,73 @@ def plot_data(file_paths, plot_title, fig, ax, data_by_path=None, **kwargs):
     return draw_plot_elements(ax, file_paths, plot_title, data_by_path=data_by_path, **kwargs)
 
 
+import matplotlib.patches as mpatches
+
+
 def save_plot(file_paths, plot_title, output_path=None, data_by_path=None, **kwargs):
-    """Saves a high-resolution plot bypassing Tkinter display quirks."""
+    """Saves a high-resolution plot or an animated MP4 video."""
     set_default_style()
     fig, axes = plt.subplots(figsize=(10, 8))
     draw_plot_elements(axes, file_paths, plot_title, data_by_path=data_by_path, **kwargs)
-    fig.tight_layout()
+
     filename = Path(output_path) if output_path else make_safe_filename(plot_title)
     filename.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(filename, transparent=False, dpi=300)
+
+    if filename.suffix.lower() == '.mp4':
+        import matplotlib.animation as animation
+
+        # 1. Gather scatter collections (points)
+        collections = [c for c in axes.collections if isinstance(c, mpl.collections.PathCollection)]
+        original_offsets = []
+        for coll in collections:
+            original_offsets.append(coll.get_offsets())
+            coll.set_offsets(np.empty((0, 2)))
+
+            # 2. Gather Ellipse patches and hide them initially
+        ellipses = [p for p in axes.patches if isinstance(p, mpatches.Ellipse)]
+        for ell in ellipses:
+            ell.set_visible(False)
+
+        fps = 30
+        duration_seconds = 3
+        total_frames = fps * duration_seconds
+
+        def update(frame):
+            fraction = (frame + 1) / total_frames
+
+            # Progressively reveal scatter points
+            for coll, offsets in zip(collections, original_offsets):
+                if len(offsets) > 0:
+                    num_points = max(1, int(len(offsets) * fraction))
+                    coll.set_offsets(offsets[:num_points])
+
+            # Make ellipses appear at full size from frame 0 onward
+            if frame == total_frames - 1:
+                for ell in ellipses:
+                    ell.set_visible(True)
+
+            return collections + ellipses
+
+        ani = animation.FuncAnimation(
+            fig,
+            update,
+            frames=total_frames,
+            interval=1000 // fps,
+            blit=False
+        )
+
+        writer = animation.FFMpegWriter(
+            fps=fps,
+            codec='libx264',
+            bitrate=5000,
+            extra_args=['-crf', '18', '-pix_fmt', 'yuv420p']
+        )
+
+        ani.save(filename, writer=writer, dpi=300)
+
+    else:
+        fig.savefig(filename, transparent=False, dpi=300)
+
     plt.close(fig)
 
 
