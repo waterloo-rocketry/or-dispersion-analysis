@@ -849,7 +849,7 @@ class FilePlotApp(QMainWindow):
 
         save_path, _ = QFileDialog.getSaveFileName(
             self, "Save plot as...", default_name,
-            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;All files (*.*)"
+            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;MP4 Video (*.mp4);;All files (*.*)"
         )
 
         # If user canceled the dialog, return
