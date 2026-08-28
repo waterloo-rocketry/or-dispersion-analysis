@@ -1,5 +1,14 @@
 """
-Script to download the map tile from the ESRI World Imagery.
+Written by: Geminini
+Collaborators: Luca Scavone
+
+Script to download the map tile from the ESRI World Imagery. GitHub doesn't handle large files very well, so
+directly pulling this repo from Git may not download a local copy of the satellite image, which is where this
+script comes in handy.
+
+Usage:
+    1. (if applicable) Update edge coordinates
+    2. Run that john
 """
 
 import contextily as cx

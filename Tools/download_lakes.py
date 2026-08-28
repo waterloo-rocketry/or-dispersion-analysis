@@ -1,3 +1,16 @@
+"""
+Written by: Geminini
+Collaborators: Luca Scavone
+
+Downloads a local GeoJSON file containing information about local bodies including lakes and smaller features. Does
+not include rivers or streams. Default area is a 20km-radius centered on the Launch Canada Advanced Pad. This file
+allows Project Atlas to associate detected water landings with local geography to help recovery efforts.
+
+Usage:
+    1. (if applicable) Update launch site coordinates
+    2. (if applicable) Update radius
+    3. Run that john
+"""
 import osmnx as ox
 
 # Launch site coordinates

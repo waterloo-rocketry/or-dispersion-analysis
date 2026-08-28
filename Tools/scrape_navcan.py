@@ -1,3 +1,15 @@
+"""
+Written by: Adrien Cheng
+Collaborators: Luca Scavone
+
+Web scraper tool to read NavCanada NOTAM and extract daily wind speed predictions for upper level winds. The scraper
+by default will export the upper level wind predictions for Kapuskasing Airport (CYYU) located ~160km away from
+Timmins, ON. All three prediction windows are exported: 7hr window, 9hr window, and 12hr window.
+
+Usage:
+    1. Run that John
+"""
+
 from playwright.sync_api import sync_playwright, Playwright
 from tkinter import filedialog
 import os

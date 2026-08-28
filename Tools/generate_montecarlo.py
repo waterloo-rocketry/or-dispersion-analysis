@@ -1,3 +1,24 @@
+"""
+Written by: Geminini
+Collaborators: Luca Scavone
+
+Script to manually generate randomized Monte Carlo simulation conditions that can be uploaded to the OpenRocket Plugin.
+An initial NavCan export file is expected, which can be generated from 'scrape_navcan.py'.
+
+Usage:
+    1. Run the script
+    2. Select NavCan export file, ensure the following column headers exist:
+        a. 'altitude'
+        b. 'speed'
+        c. 'direction'
+        d. 'stddev'
+        e. 'windDirStdDev'
+    3. Select option 1 to modify/enter a custom standard deviation for each altitude layer OR
+    4. Select option 2 to enter a general standard deviation for all altitude layers
+    5. Specify temperature and pressure values and standard deviations
+    6. Enter the number of simulations to produce
+    7. Save the file, name it something useful
+"""
 import pandas as pd
 import numpy as np
 from datetime import datetime
