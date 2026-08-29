@@ -18,7 +18,7 @@ The core deliverable is a desktop app that takes Monte Carlo simulation CSVs fro
   - [Geography & Weather Utilities](#geography--weather-utilities)
 - [Setup](#setup)
 - [Repo Structure](#repo-structure)
-- [Known Quirks](#known-quirks)
+- [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 
 ---
