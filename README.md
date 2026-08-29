@@ -147,7 +147,7 @@ project-root/
 
 ---
 
-## Known Quirks
+## Known Limitations
 
 - **Launch site coordinates are hardcoded** in `data_engine.py` (`LAUNCH_LAT`, `LAUNCH_LON`) and duplicated in `download_lakes.py`/`download_map.py`. If the launch site ever changes, all of these need to be updated.
 - **Wind speed units in knots** throughout (main app stats panel, outlier analysis, `generate_montecarlo.py`). No conversion is applied, so input files pulled from a source using different units should be checked carefully.
