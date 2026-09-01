@@ -360,8 +360,14 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
             ax=ax
         )
 
-    lat_ref, long_ref = 47.704847, -82.510814
-    width, length = 47, 35
+    # LC2026 WAIVER
+    # lat_ref, long_ref = 47.704847, -82.510814
+    # width, length = 47, 35
+
+    # UNLIMITED WAIVER
+    lat_ref, long_ref = 47.4304886, -82.8350364
+    width, length = 116, 70
+
     deg_lat_per_mile = 1 / 69.0
     deg_lon_per_mile = 1 / (69.17 * np.cos(np.radians(lat_ref)))
     width_deg, height_deg = width * deg_lon_per_mile, length * deg_lat_per_mile
@@ -417,7 +423,8 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
         cx.add_basemap(
             ax,
             crs="EPSG:4326",
-            source=str(LC_GEOGRAPHY_DIR / "lc_basemap.tif"),
+            # source=str(LC_GEOGRAPHY_DIR / "lc_basemap.tif"),
+            source=cx.providers.Esri.WorldImagery,
             zorder=0,
             alpha=0.85,
             attribution=False
