@@ -3,11 +3,11 @@ import threading
 
 import pandas as pd
 
-from PySide6.QtCore import Qt, QSettings, QObject, QThread, Signal
+from PySide6.QtCore import Qt, QSettings, QObject, QThread, Signal, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QLineEdit, QCheckBox, QGroupBox, QScrollArea,
-    QFrame, QFileDialog, QMessageBox, QDialog, QApplication
+    QFrame, QFileDialog, QMessageBox, QDialog, QApplication, QDockWidget
 )
 
 from matplotlib.figure import Figure
@@ -92,6 +92,14 @@ QCheckBox {
 QScrollArea {
     background-color: #1e1f22;
     border: none;
+}
+QDockWidget {
+    color: #e6e6e6;
+    font-weight: bold;
+}
+QDockWidget::title {
+    background-color: #2b2d30;
+    padding: 6px;
 }
 QLabel#mutedLabel {
     color: #9a9a9a;
@@ -179,6 +187,8 @@ class FilePlotApp(QMainWindow):
         self._wind_windows = {}
         self._loader_thread = None
         self._loader_worker = None
+        self._stats_panel_opened_once = False
+        self._last_plot_options = None
         self._build_ui()
         self._setup_matplotlib()
         self._setup_stats_window()
@@ -223,7 +233,7 @@ class FilePlotApp(QMainWindow):
         self.clear_btn = QPushButton("Clear")
         self.save_file_btn = QPushButton("Save Plot")
         self.export_stats_btn = QPushButton("Export Stats")
-        self.stats_toggle_btn = QPushButton("Show Stats Window")
+        self.stats_toggle_btn = QPushButton("Show Stats Panel")
         self.stats_toggle_btn.setCheckable(True)
 
         for btn in (self.select_btn, self.plot_btn, self.clear_btn, self.save_file_btn,
@@ -324,36 +334,57 @@ class FilePlotApp(QMainWindow):
         self.plot_layout.addWidget(self.canvas)
         self.plot_layout.addWidget(self.toolbar)
 
+        # When the plot area changes size, redraw the plot so the map fills the new shape. 
+        # The timer waits until resizing has stopped
+        # for 0.4 s, so dragging the window edge does not cause lots of redraws.
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(400)
+        self._resize_timer.timeout.connect(self._redraw_last_plot)
+        self.canvas.mpl_connect("resize_event", lambda _event: self._resize_timer.start())
+
+
+    def _redraw_last_plot(self):
+        """
+        Redraws the most recent plot with the same files and options, e.g. after the plot
+        area changes size. Only the plot is redrawn - the stats panel is left alone.
+        """
+        if self._last_plot_options is None:
+            return
+        try:
+            paths = self._last_plot_options["file_paths"]
+            plot_data(
+                fig=self.fig,
+                ax=self.ax,
+                data_by_path={p: self._load_csv(p) for p in paths},       # already cached
+                water_by_path={p: self._get_water_landing(p) for p in paths},  # already cached
+                **self._last_plot_options
+            )
+            self.canvas.draw()
+        except Exception as error:
+            print(f"Could not redraw plot after resize: {error}")
+
 
     def _setup_stats_window(self):
         """
-        Builds the toggleable 'Flight Statistics' pop-up window.
-        Uses a single reusable QDialog so it floats over the main UI without
-        messing with the plot's aspect ratio, while avoiding desktop clutter.
+        Builds the 'Flight Statistics' panel on the right side of the main window.
+        Replaces the old pop-up window, so it never covers the plot or piles up on screen.
+        The 'Show Stats Panel' button shows and hides it.
         """
-        self.stats_window = QDialog(self)
-        self.stats_window.setWindowTitle("Flight Statistics")
-        self.stats_window.setMinimumSize(400, 600)
-
-        # Setup layout to hold the scroll area
-        layout = QVBoxLayout(self.stats_window)
-        layout.setContentsMargins(0, 0, 0, 0)
-
         self.stats_scroll = QScrollArea()
         self.stats_scroll.setWidgetResizable(True)
-        layout.addWidget(self.stats_scroll)
+        self.stats_scroll.setMinimumWidth(340)
 
-        # Uncheck the toggle button if the user closes the window via the 'X' button
-        self.stats_window.finished.connect(lambda _: self.stats_toggle_btn.setChecked(False))
+        self.stats_window = QDockWidget("Flight Statistics", self)
+        self.stats_window.setObjectName("statsDock")
+        self.stats_window.setWidget(self.stats_scroll)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.stats_window)
+        self.stats_window.hide()
 
-        # Tie the toggle button to the window's visibility
-        def toggle_window(checked):
-            if checked:
-                self.stats_window.show()
-            else:
-                self.stats_window.hide()
-
-        self.stats_toggle_btn.toggled.connect(toggle_window)
+        # Keep the button and the panel in sync, whichever one the user clicks
+        # (the panel's own close button included)
+        self.stats_toggle_btn.toggled.connect(self.stats_window.setVisible)
+        self.stats_window.toggleViewAction().toggled.connect(self.stats_toggle_btn.setChecked)
 
 
     def _on_plot_option_changed(self, *_args):
@@ -501,6 +532,7 @@ class FilePlotApp(QMainWindow):
         # may no longer exist at that path). Clearing it here means "Export Stats" falls
         # through to its existing "please plot at least one file" guard instead.
         self.active_paths = []
+        self._last_plot_options = None
         self.stats_window.hide()
         self.stats_toggle_btn.setChecked(False)
 
@@ -592,21 +624,25 @@ class FilePlotApp(QMainWindow):
         def _do_plot(data_by_path):
             try:
                 water_by_path = {p: self._get_water_landing(p) for p in self.active_paths}
-                self.outlier_date_summary = plot_data(
+                plot_options = dict(
                     file_paths=self.active_paths,
                     plot_title=plot_title,
-                    fig=self.fig,
-                    ax=self.ax,
-                    data_by_path=data_by_path,
-                    water_by_path=water_by_path,
                     plot_LC_ellipse=LC_flag,
                     plot_sigma_ellipses=sigma_flag,
                     plot_confidence_ellipse=confidence_flag,
                     confidence=confidence_level,
                     plot_top_outliers=top_outliers_flag,
                     plot_water_landings=water_landings_flag
+                )
+                self.outlier_date_summary = plot_data(
+                    fig=self.fig,
+                    ax=self.ax,
+                    data_by_path=data_by_path,
+                    water_by_path=water_by_path,
+                    **plot_options
                 ) or {}
                 self.canvas.draw()
+                self._last_plot_options = plot_options  # remembered for redraws after resizing
                 self._populate_stats_panel()
                 self.statusBar().showMessage("Plot updated")
             except Exception as error:
@@ -723,8 +759,11 @@ class FilePlotApp(QMainWindow):
 
         inner_layout.addStretch()
         self.stats_scroll.setWidget(inner)
-        self.stats_window.show()
-        self.stats_toggle_btn.setChecked(True)
+        # Open the panel automatically the first time something is plotted; after that,
+        # leave it however the user has it (open or closed)
+        if not self._stats_panel_opened_once:
+            self._stats_panel_opened_once = True
+            self.stats_toggle_btn.setChecked(True)
 
 
     def _run_outlier_graph(self, i, hist_path):
@@ -976,6 +1015,7 @@ class FilePlotApp(QMainWindow):
                 win.close()
         self._wind_windows = {}
 
+        self._last_plot_options = None
         self.ax.clear()
         self.canvas.draw()
 
