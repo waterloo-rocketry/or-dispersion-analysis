@@ -10,4 +10,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "pandas>=2.0.0",
     "contextily>=1.7.0",
+    "pyside6>=6.11.2",
+    "geopandas>=1.2.0",
+    "shapely>=2.1.2",
 ]
