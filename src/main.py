@@ -3,9 +3,11 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from app import FilePlotApp, APP_STYLESHEET
+from plotting import ensure_basemap
 
 
 def main():
+    ensure_basemap()
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
 

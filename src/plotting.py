@@ -32,6 +32,40 @@ LC_GEOGRAPHY_DIR    = Path(__file__).resolve().parent.parent / "LC Geography"
 # geographic ellipse geometry below.
 METERS_PER_NM = 1852
 
+# Automatically downloads the satellite basemap once the app runs for the first time.
+BASEMAP_PATH   = LC_GEOGRAPHY_DIR / "lc_basemap_v2.tif"
+BASEMAP_BOUNDS = {"w": -83.2, "s": 46.3, "e": -80.0, "n": 49.6}  # degrees longitude/latitude
+BASEMAP_ZOOM   = 10  # about 100 m per pixel. Bigger numbers are sharper but 
+# significantly larger files.
+
+
+def ensure_basemap():
+    """
+    Makes sure the satellite basemap is on disk, downloading it once if it's missing.
+    :return:    path to the basemap file, or None if it couldn't be downloaded (e.g. no internet)
+    """
+    if BASEMAP_PATH.exists():
+        return BASEMAP_PATH
+
+    print("Basemap not found, downloading it.")
+    partial_path = BASEMAP_PATH.with_name(BASEMAP_PATH.name + ".part")
+    try:
+        cx.bounds2raster(
+            **BASEMAP_BOUNDS,
+            path=str(partial_path),
+            ll=True,
+            source=cx.providers.Esri.WorldImagery,
+            zoom=BASEMAP_ZOOM
+        )
+        # Only give the file its real name once the download has fully finished
+        partial_path.replace(BASEMAP_PATH)
+        print(f"Basemap saved to {BASEMAP_PATH}")
+        return BASEMAP_PATH
+    except Exception as error:
+        partial_path.unlink(missing_ok=True)
+        print(f"Could not download basemap ({error}). Falling back to online map tiles.")
+        return None
+
 
 def get_colors(file_paths):
     """
@@ -419,26 +453,23 @@ def draw_plot_elements(ax, file_paths, plot_title, plot_LC_ellipse, plot_sigma_e
     # basemap is cropped to the true final extent instead.
     ax.apply_aspect()
 
+    # Use the downloaded map if we have it, otherwise fetch map tiles online like before
+    if BASEMAP_PATH.exists():
+        basemap_source = str(BASEMAP_PATH)
+    else:
+        basemap_source = cx.providers.Esri.WorldImagery
+
     try:
         cx.add_basemap(
             ax,
             crs="EPSG:4326",
-            # source=str(LC_GEOGRAPHY_DIR / "lc_basemap.tif"),
-            source=cx.providers.Esri.WorldImagery,
+            source=basemap_source,
             zorder=0,
             alpha=0.85,
             attribution=False
         )
-    except Exception:
-        # cx.add_basemap(
-        #     ax,
-        #     crs="EPSG:4326",
-        #     source=cx.providers.Esri.WorldImagery,
-        #     zorder=0,
-        #     alpha=0.9,
-        #     attribution=False
-        # )
-        print("Could not find basemap.")
+    except Exception as error:
+        print(f"Could not draw basemap: {error}")
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:

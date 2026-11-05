@@ -206,4 +206,5 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-LC Geography/lc_basemap.tif
+# Satellite basemaps are downloaded automatically by the app
+LC Geography/*.tif*

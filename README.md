@@ -103,7 +103,7 @@ These generate static assets that `plotting.py` (and therefore the main app) dep
 
 **`download_lakes.py`** — Pulls lake/water body geometry from OpenStreetMap (via `osmnx`) within a 20 km radius of the launch site, saved as `LC Geography/lakes.geojson`. This is what powers the water-landing detection in the main app.
 
-**`download_map.py`** — Downloads a satellite basemap tile (ESRI World Imagery, via `contextily`) for the area around the launch site, saved as `LC Geography/lc_basemap.tif`. This exists because GitHub doesn't handle large binary files gracefully, so the basemap can be regenerated locally instead of relying on it being tracked in the repo.
+**`download_map.py`** — Downloads a satellite basemap tile (ESRI World Imagery, via `contextily`) for the area around the launch site, saved as `LC Geography/lc_basemap.tif`. This exists because GitHub doesn't handle large binary files gracefully, so the basemap can be regenerated locally instead of relying on it being tracked in the repo. The app now downloads the basemap automatically on first launch (saved as LC Geography/lc_basemap_v2.tif), so you normally don’t need to run this script.
 
 **`extract_roads.py`** — Takes a KML file (exportable from Google Earth) containing nearby highways and converts it to a CSV of lat/lon points, which `plotting.py` overlays on the dispersion map for context.
 
